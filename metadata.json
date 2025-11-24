@@ -1,0 +1,8 @@
+{
+  "name": "MoveMate AI Estimator",
+  "description": "AI-powered moving inventory estimator. Capture items, estimate volume/weight, and generate moving manifests.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
