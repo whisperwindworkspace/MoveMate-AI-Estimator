@@ -1,11 +1,12 @@
 
 import { supabase } from './supabaseClient';
-import { InventoryItem, CompanyProfile } from '../types';
+import { InventoryItem, CompanyProfile, JobRecord } from '../types';
 
 // --- Offline Storage (Memory) ---
 let isOfflineMode = false;
 let memItems: any[] = [];
 let memCompanies: any[] = [];
+let memJobs: any[] = [];
 
 // --- Mappers ---
 const mapDbItemToApp = (dbItem: any): InventoryItem => ({
@@ -159,6 +160,44 @@ export const dbService = {
     }
   },
 
+  // JOBS / STATISTICS
+  async createJob(job: Partial<JobRecord>) {
+    if (isOfflineMode) {
+        const newJob = { ...job, id: crypto.randomUUID(), created_at: new Date().toISOString() };
+        memJobs.push(newJob);
+        return newJob;
+    }
+
+    try {
+        const { data, error } = await supabase.from('jobs').insert(job).select().single();
+        if (error) throw error;
+        return data;
+    } catch (e) {
+        console.error("Create Job Error", e);
+        return null;
+    }
+  },
+
+  async getCompanyJobs(companyId: string): Promise<JobRecord[]> {
+    if (isOfflineMode) {
+        return memJobs.filter(j => j.company_id === companyId);
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('jobs')
+            .select('*')
+            .eq('company_id', companyId)
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data as JobRecord[];
+    } catch (e) {
+        console.error("Fetch Jobs Error", e);
+        return [];
+    }
+  },
+
   // COMPANIES / AUTH
   async loginCompany(username: string, password: string): Promise<CompanyProfile | null> {
     if (isOfflineMode) {
@@ -303,6 +342,7 @@ export const dbService = {
   },
 
   async updateCompanySettings(id: string, email: string, crmConfig: any) {
+    console.log("Saving settings for company:", id);
     if (isOfflineMode) {
         const idx = memCompanies.findIndex(c => c.id === id);
         if (idx >= 0) {
@@ -312,11 +352,25 @@ export const dbService = {
         return;
     }
 
-    const { error } = await supabase.from('companies').update({
+    // Include .select() to ensure we get confirmation that a row was actually found and updated
+    const { data, error } = await supabase.from('companies').update({
         admin_email: email,
         crm_config: crmConfig
-    }).eq('id', id);
-    if (error) throw error;
+    })
+    .eq('id', id)
+    .select();
+
+    if (error) {
+        console.error("DB Update Error:", error);
+        throw error;
+    }
+
+    if (!data || data.length === 0) {
+        console.error("No company found with ID:", id);
+        throw new Error("Failed to update: Company not found");
+    }
+
+    console.log("Settings updated successfully for:", data[0].name);
   },
 
   // STORAGE

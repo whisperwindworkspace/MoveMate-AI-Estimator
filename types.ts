@@ -1,5 +1,4 @@
 
-
 export interface InventoryItem {
   id: string;
   name: string;
@@ -23,7 +22,8 @@ export interface InventorySummary {
 export interface CRMConfig {
   provider: 'supermove' | 'salesforce' | null;
   isConnected: boolean;
-  apiKey?: string; // Mock property
+  apiKey?: string;
+  endpointUrl?: string; // Real endpoint for webhook/API
 }
 
 export interface PackingRequirements {
@@ -41,9 +41,23 @@ export interface JobDetails {
   packingReqs?: PackingRequirements;
 }
 
+// Record stored in DB for analytics
+export interface JobRecord {
+  id: string;
+  company_id: string;
+  customer_name: string;
+  job_id_input: string;
+  total_volume: number;
+  total_weight: number;
+  item_count: number;
+  crm_status: 'synced' | 'failed' | 'skipped';
+  created_at: string;
+}
+
 export interface CompanyProfile {
   id: string;
   name: string; // Display name e.g., "Speedy Movers"
+  slug?: string;
   username?: string; // Legacy/Offline: Login username
   password?: string; // Legacy/Offline: Login password
   adminEmail: string;

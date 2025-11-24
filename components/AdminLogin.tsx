@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Lock, ArrowLeft, User, Building, Key, Mail, CheckCircle } from 'lucide-react';
+import { Lock, ArrowLeft, User, Building, Key, Mail, CheckCircle, AlertCircle } from 'lucide-react';
 
 interface AdminLoginProps {
   onLogin: (username: string, password: string) => Promise<boolean>;
@@ -23,6 +23,7 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, onRequestReset, onRese
   const [newPassword, setNewPassword] = useState('');
 
   const [error, setError] = useState('');
+  const [showErrorPopup, setShowErrorPopup] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
 
@@ -37,7 +38,8 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, onRequestReset, onRese
     
     const success = await onLogin(email, password);
     if (!success) {
-        setError('Invalid credentials. Please check your email and password.');
+        // We use a popup instead of inline error, and keep the message generic for security
+        setShowErrorPopup(true);
     }
     setIsLoading(false);
   };
@@ -62,6 +64,9 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, onRequestReset, onRese
         
         setMode('VERIFY');
     } else {
+        // For password reset, we might still show generic error or handle differently, 
+        // but typically here we might just say "If account exists, code sent" for high security.
+        // For this demo, we'll stick to the existing inline error for reset flow specifically.
         setError('Account not found.');
     }
     setIsLoading(false);
@@ -94,7 +99,7 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, onRequestReset, onRese
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-slate-50">
-      <div className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
+      <div className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-8 border border-slate-100 relative">
         <button 
           onClick={mode === 'LOGIN' ? onBack : () => { setMode('LOGIN'); setError(''); }}
           className="text-slate-400 hover:text-slate-600 mb-6 flex items-center gap-1 text-sm transition-colors"
@@ -153,7 +158,8 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, onRequestReset, onRese
                         </div>
                     </div>
 
-                    {error && (
+                    {/* Inline error removed for login, replaced by popup */}
+                    {error && mode !== 'LOGIN' && (
                         <div className="bg-red-50 text-red-600 text-xs p-3 rounded-lg border border-red-100">
                             {error}
                         </div>
@@ -283,6 +289,29 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, onRequestReset, onRese
         )}
 
       </div>
+
+      {/* ERROR POPUP MODAL */}
+      {showErrorPopup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full text-center border border-slate-100 transform scale-100">
+                <div className="w-16 h-16 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <AlertCircle size={32} />
+                </div>
+                <h3 className="text-xl font-bold text-slate-800 mb-2">Login Failed</h3>
+                <div className="text-slate-600 mb-6 text-sm space-y-2">
+                    <p>Invalid email or password.</p>
+                    <p className="text-slate-400 text-xs">If you do not have an account, please contact the Super Admin to request access.</p>
+                </div>
+                <button 
+                    onClick={() => setShowErrorPopup(false)}
+                    className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-colors"
+                >
+                    Try Again
+                </button>
+            </div>
+        </div>
+      )}
+
     </div>
   );
 };

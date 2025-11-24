@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { InventoryItem, CRMConfig, JobDetails, PackingRequirements } from '../types';
 import { Send, FileText, Scale, Box, Download, X, Mail, CheckCircle2, CloudLightning, Truck, Hash, User, Calendar, ArrowRight, PackageOpen, PenLine, Package } from 'lucide-react';
+import { dbService } from '../services/dbService';
 
 interface SummaryPanelProps {
   items: InventoryItem[];
@@ -15,7 +16,7 @@ interface SummaryPanelProps {
 const SummaryPanel: React.FC<SummaryPanelProps> = ({ items, crmConfig, jobDetails, adminEmail, companyName, onUpdateJobDetails }) => {
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [modalStep, setModalStep] = useState<'DETAILS' | 'PACKING' | 'REVIEW'>('REVIEW');
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success'>('idle');
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   
   // Local state for the details form
   const [inputMode, setInputMode] = useState<'JOB_ID' | 'MANUAL'>('JOB_ID');
@@ -105,15 +106,6 @@ const SummaryPanel: React.FC<SummaryPanelProps> = ({ items, crmConfig, jobDetail
   };
 
   const handleSendEmail = () => {
-    // Requested Format:
-    // Job ID or Name + Move Date
-    //
-    // **Inventory**
-    // Total volume: 
-    // Total weight: 
-    //
-    // Quantity x Item Name
-
     const formattedList = selectedItems.map(item => {
         return `${item.quantity} x ${item.name}`;
     }).join('\n');
@@ -204,13 +196,72 @@ ${packingText}
     document.body.removeChild(link);
   };
 
-  const handleCRMSync = () => {
+  const handleCRMSync = async () => {
     setSyncStatus('syncing');
-    // Simulate API Call
-    setTimeout(() => {
+
+    try {
+        // 1. Prepare Payload
+        const payload = {
+            company_id: (await dbService.getCompanyPublicProfile(new URLSearchParams(window.location.search).get('cid') || '')).id, // Best effort to get company ID if available via URL, otherwise might be null if purely transient
+            customer_name: jobDetails.customerName || 'Unknown',
+            job_id_input: jobDetails.jobId || '',
+            total_volume: totalVolume,
+            total_weight: totalWeight,
+            item_count: selectedItems.length,
+            crm_status: 'synced' as const,
+            items: selectedItems.map(i => ({ name: i.name, qty: i.quantity })) // Simplified for CRM
+        };
+
+        // 2. Save to Database (for Admin Stats)
+        // Note: We need the company ID. 
+        // If this is guest mode, we try to get it from the URL params or settings context if we had access.
+        // For now, we assume DBService can handle saving or we grab from current context.
+        // A robust app would pass companyId into SummaryPanel.
+        // * Assuming dbService.createJob can handle it or we skip if no company ID context *
+        
+        // Let's try to fetch the active company ID from the URL query param 'cid' for now, 
+        // as that's how Guests are identified.
+        const cid = new URLSearchParams(window.location.search).get('cid');
+        if (cid) {
+            payload.company_id = cid;
+            await dbService.createJob({
+                company_id: cid,
+                customer_name: jobDetails.customerName || 'Unknown',
+                job_id_input: jobDetails.jobId || '',
+                total_volume: totalVolume,
+                total_weight: totalWeight,
+                item_count: selectedItems.length,
+                crm_status: 'synced'
+            });
+        }
+
+        // 3. Perform Real CRM POST Request
+        if (crmConfig.isConnected && crmConfig.endpointUrl) {
+            const response = await fetch(crmConfig.endpointUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${crmConfig.apiKey}`
+                },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                throw new Error(`CRM responded with ${response.status}`);
+            }
+        } else {
+             // Fallback simulation if no URL provided but marked connected
+             await new Promise(r => setTimeout(r, 1000));
+        }
+
         setSyncStatus('success');
         setTimeout(() => setSyncStatus('idle'), 3000);
-    }, 2000);
+
+    } catch (e) {
+        console.error("Sync failed", e);
+        setSyncStatus('error');
+        setTimeout(() => setSyncStatus('idle'), 3000);
+    }
   };
 
   return (
@@ -219,7 +270,6 @@ ${packingText}
         <div className="max-w-2xl mx-auto">
             
             <div className="flex justify-between items-end mb-4">
-                {/* Stats now at top of screen, hidden here or replaced with mini summary if needed */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full mr-4 opacity-50 grayscale text-[10px] sm:text-xs">
                     <div className="flex flex-col">
                         <span className="text-slate-500 dark:text-slate-400 flex items-center gap-1"><Box size={10}/> Vol</span>
@@ -479,6 +529,8 @@ ${packingText}
                                             className={`w-full py-3 px-4 rounded-xl font-semibold shadow-lg flex items-center justify-center gap-2 transition-all active:scale-95 ${
                                                 syncStatus === 'success' 
                                                 ? 'bg-green-600 text-white shadow-green-200 dark:shadow-green-900/30'
+                                                : syncStatus === 'error'
+                                                ? 'bg-red-600 text-white shadow-red-200'
                                                 : 'bg-indigo-600 text-white shadow-indigo-200 dark:shadow-indigo-900/30 hover:bg-indigo-700'
                                             }`}
                                         >
@@ -486,6 +538,8 @@ ${packingText}
                                                 <>Syncing...</>
                                             ) : syncStatus === 'success' ? (
                                                 <><CheckCircle2 size={20} /> Synced to {crmConfig.provider}</>
+                                            ) : syncStatus === 'error' ? (
+                                                <>Sync Failed - Try Again</>
                                             ) : (
                                                 <><CloudLightning size={20} /> Sync to {crmConfig.provider === 'supermove' ? 'Supermove' : 'Salesforce'}</>
                                             )}

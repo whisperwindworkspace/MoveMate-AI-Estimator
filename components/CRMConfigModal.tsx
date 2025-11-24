@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { CRMConfig } from '../types';
-import { X, CheckCircle, Cloud, ArrowRight } from 'lucide-react';
+import { X, CheckCircle, Cloud, ArrowRight, Link2 } from 'lucide-react';
 
 interface CRMConfigModalProps {
   isOpen: boolean;
@@ -25,7 +25,8 @@ const CRMConfigModal: React.FC<CRMConfigModalProps> = ({ isOpen, onClose, config
     if (!tempConfig.provider) return;
     
     setIsSaving(true);
-    // Simulate API connection delay
+    // For real integration, we just save the config. The "Sync" button in SummaryPanel triggers the actual call.
+    // Here we just validate and close.
     setTimeout(() => {
       onSave({
         ...tempConfig,
@@ -33,11 +34,11 @@ const CRMConfigModal: React.FC<CRMConfigModalProps> = ({ isOpen, onClose, config
       });
       setIsSaving(false);
       onClose();
-    }, 1500);
+    }, 800);
   };
 
   const handleDisconnect = () => {
-    const newConfig: CRMConfig = { provider: null, isConnected: false, apiKey: '' };
+    const newConfig: CRMConfig = { provider: null, isConnected: false, apiKey: '', endpointUrl: '' };
     setTempConfig(newConfig);
     onSave(newConfig);
   };
@@ -90,22 +91,42 @@ const CRMConfigModal: React.FC<CRMConfigModalProps> = ({ isOpen, onClose, config
               </div>
 
               {tempConfig.provider && (
-                <div className="animate-in slide-in-from-top-2 duration-300">
-                  <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">
-                    API Key (Simulated)
-                  </label>
-                  <input 
-                    type="password" 
-                    value="************************"
-                    disabled
-                    className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2.5 text-slate-500 text-sm mb-4 cursor-not-allowed"
-                  />
+                <div className="animate-in slide-in-from-top-2 duration-300 space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">
+                      API Endpoint URL
+                    </label>
+                    <div className="relative">
+                        <Link2 className="absolute left-3 top-3 text-slate-400" size={16}/>
+                        <input 
+                            type="url"
+                            value={tempConfig.endpointUrl || ''}
+                            onChange={(e) => setTempConfig({...tempConfig, endpointUrl: e.target.value})}
+                            placeholder={`https://api.${tempConfig.provider}.com/v1/inventories`}
+                            className="w-full pl-10 p-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+                        />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">
+                      API Key
+                    </label>
+                    <input 
+                        type="password"
+                        value={tempConfig.apiKey || ''}
+                        onChange={(e) => setTempConfig({...tempConfig, apiKey: e.target.value})}
+                        placeholder="Enter your API Key"
+                        className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+
                   <button
                     onClick={handleConnect}
-                    disabled={isSaving}
-                    className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold shadow-lg shadow-blue-200 flex items-center justify-center gap-2"
+                    disabled={isSaving || !tempConfig.apiKey || !tempConfig.endpointUrl}
+                    className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold shadow-lg shadow-blue-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {isSaving ? 'Connecting...' : `Connect to ${tempConfig.provider === 'supermove' ? 'Supermove' : 'Salesforce'}`}
+                    {isSaving ? 'Saving...' : `Save & Connect`}
                     {!isSaving && <ArrowRight size={16} />}
                   </button>
                 </div>
@@ -120,6 +141,9 @@ const CRMConfigModal: React.FC<CRMConfigModalProps> = ({ isOpen, onClose, config
                <p className="text-slate-500 mb-6">
                  Your account is successfully linked to <span className="font-semibold capitalize text-slate-800">{config.provider}</span>.
                </p>
+               <div className="text-xs text-slate-400 break-all mb-6 bg-slate-50 p-2 rounded border border-slate-100">
+                  {config.endpointUrl}
+               </div>
                <button 
                  onClick={handleDisconnect}
                  className="text-red-500 text-sm font-medium hover:underline"

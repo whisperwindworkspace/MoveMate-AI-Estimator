@@ -1,15 +1,9 @@
-
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl =
-  (import.meta as any).env?.VITE_SUPABASE_URL ||
-  'https://zhajwkzynfnqjeowznou.supabase.co';
+const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || 'https://zhajwkzynfnqjeowznou.supabase.co';
+const supabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 'sb_publishable_cJTLEvgY3You6WRcBwPXiw_da0v7mcH';
 
-const supabaseKey =
-  (import.meta as any).env?.VITE_SUPABASE_ANON_KEY ||
-  'sb_publishable_cJTLEvgY3You6WRcBwPXiw_da0v7mcH';
-
-export const supabase = createClient(supabaseUrl, supabaseKey, {
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,

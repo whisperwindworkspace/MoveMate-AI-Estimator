@@ -8,14 +8,14 @@ interface DatabaseSetupModalProps {
 
 const SQL_SCRIPT = `
 -- ==========================================
--- 1. CLEANUP (Optional - Be Careful!)
+-- 1. FIX MISSING COLUMNS (RUN THIS FIRST!)
 -- ==========================================
--- drop table if exists items;
--- drop table if exists users;
--- drop table if exists companies;
+-- If your settings aren't saving, it's because these columns are missing.
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS admin_email text;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS crm_config jsonb;
 
 -- ==========================================
--- 2. CREATE TABLES
+-- 2. CREATE TABLES (If they don't exist)
 -- ==========================================
 
 -- Storage for images
@@ -56,6 +56,19 @@ create table if not exists items (
   created_at timestamptz default now()
 );
 
+-- Jobs History Table (For Statistics)
+create table if not exists jobs (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid references companies(id) on delete set null,
+  customer_name text,
+  job_id_input text,
+  total_volume numeric,
+  total_weight numeric,
+  item_count integer,
+  crm_status text,
+  created_at timestamptz default now()
+);
+
 -- ==========================================
 -- 3. SECURITY POLICIES (RLS)
 -- ==========================================
@@ -63,39 +76,21 @@ alter table items enable row level security;
 alter table companies enable row level security;
 alter table users enable row level security;
 alter table storage.objects enable row level security;
+alter table jobs enable row level security;
 
 -- Allow public access for this demo app
--- (In production, restrict these policies to authenticated users)
 create policy "Public Access Items" on items for all using (true) with check (true);
 create policy "Public Access Companies" on companies for all using (true) with check (true);
 create policy "Public Access Users" on users for all using (true) with check (true);
 create policy "Public Access Storage" on storage.objects for all using (true) with check (true);
+create policy "Public Access Jobs" on jobs for all using (true) with check (true);
 
 -- ==========================================
--- 4. SEED DATA (IMPORTANT!)
+-- 4. SEED DATA
 -- ==========================================
-
--- A. Create the 'Super Admin' Company Profile
 INSERT INTO companies (name, admin_email, crm_config)
 VALUES ('Super Admin', 'admin@movemate.ai', '{"provider": null, "isConnected": false}')
 ON CONFLICT DO NOTHING;
-
--- ==========================================
--- 5. HOW TO CREATE THE SUPER USER LOGIN
--- ==========================================
-/*
-   STEP A: Go to Supabase Dashboard -> Authentication -> Users.
-   STEP B: Click "Add User" and create a user (e.g., email: admin@movemate.ai).
-   STEP C: Copy the 'User UID' of the new user.
-   STEP D: Run the SQL below (Replace YOUR_USER_UID_HERE):
-
-   INSERT INTO users (id, company_id, role)
-   VALUES (
-     'YOUR_USER_UID_HERE', 
-     (SELECT id FROM companies WHERE name = 'Super Admin' LIMIT 1), 
-     'SUPER_ADMIN'
-   );
-*/
 `;
 
 const DatabaseSetupModal: React.FC<DatabaseSetupModalProps> = ({ onClose }) => {
@@ -119,9 +114,9 @@ const DatabaseSetupModal: React.FC<DatabaseSetupModalProps> = ({ onClose }) => {
           <div className="flex items-center gap-3 text-red-400">
             <Database size={32} />
             <div>
-              <h1 className="text-xl font-bold text-white">Database Setup Required</h1>
+              <h1 className="text-xl font-bold text-white">Database Schema Update</h1>
               <p className="text-slate-400 text-sm mt-1">
-                Run this SQL in your Supabase Dashboard to exit Demo Mode and enable logins.
+                If data isn't saving, run this SQL in your Supabase Dashboard to fix missing columns.
               </p>
             </div>
           </div>

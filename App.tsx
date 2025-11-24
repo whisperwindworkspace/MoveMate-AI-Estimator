@@ -184,10 +184,18 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
             return false;
         }
 
-        // Online Mode - Trigger sign in. The subscription in useEffect will handle the state update/routing.
+        // Online Mode - Trigger sign in.
         const user = await signInWithEmail(usernameOrEmail, password);
         if (!user) return false;
         
+        // Strict check: Ensure the user has a linked company profile
+        const profile = await getUserProfile(user.id);
+        if (!profile) {
+            console.warn("User logged in but has no linked company profile.");
+            await signOut();
+            return false;
+        }
+
         return true;
     } catch (e) {
         console.error("Login failed", e);
@@ -251,9 +259,20 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   // --- Handlers for Company Settings ---
 
   const handleUpdateSettings = async (newSettings: AppSettings) => {
+    // 1. Optimistic Update
     setSettings(newSettings);
+    
+    // 2. Persist to DB
     if (currentCompanyId) {
-        await dbService.updateCompanySettings(currentCompanyId, newSettings.adminEmail, newSettings.crmConfig);
+        try {
+            await dbService.updateCompanySettings(currentCompanyId, newSettings.adminEmail, newSettings.crmConfig);
+        } catch (e) {
+            console.error("Failed to save settings to DB:", e);
+            setError("Settings could not be saved. Please check your connection.");
+            // Ideally revert optimistic update here, but for now we rely on user retry
+        }
+    } else {
+        console.warn("No Company ID found, cannot save settings.");
     }
   };
 
