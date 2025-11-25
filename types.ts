@@ -56,12 +56,16 @@ export interface JobRecord {
 
 export interface CompanyProfile {
   id: string;
-  name: string; // Display name e.g., "Speedy Movers"
-  slug?: string;
-  username?: string; // Legacy/Offline: Login username
-  password?: string; // Legacy/Offline: Login password
-  adminEmail: string;
-  crmConfig: CRMConfig;
+  name: string;
+  slug?: string;                     // <-- add this line
+  adminEmail?: string | null;
+  crmConfig?: {
+    provider: string | null;
+    isConnected: boolean;
+    apiKey?: string;
+  } | null;
+  username?: string | null;
+  password?: string | null;
 }
 
 export interface UserProfile {
