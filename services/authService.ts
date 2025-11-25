@@ -52,6 +52,7 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
             companies (
                 id,
                 name,
+                slug,
                 admin_email,
                 crm_config
             )

@@ -1,4 +1,6 @@
 
+
+
 import React, { useState, useEffect } from 'react';
 import { InventoryItem, AppSettings, JobDetails, ViewMode, CompanyProfile, UserRole } from './types';
 import { DEFAULT_ADMIN_EMAIL } from './constants';
@@ -16,7 +18,7 @@ import AdminLogin from './components/AdminLogin';
 import AdminDashboard from './components/AdminDashboard';
 import SuperAdminDashboard from './components/SuperAdminDashboard';
 import DatabaseSetupModal from './components/DatabaseSetupModal';
-import { Box, Truck, Plus, LogOut, Lock, Loader2, AlertTriangle, Scale, FileText, Package } from 'lucide-react';
+import { Box, Truck, Plus, LogOut, Lock, Loader2, AlertTriangle, Scale, FileText, Package, Ban } from 'lucide-react';
 
 interface AppProps {
   initialSlug?: string;
@@ -28,6 +30,9 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   const [currentUserRole, setCurrentUserRole] = useState<UserRole>('GUEST');
   const [currentCompanyId, setCurrentCompanyId] = useState<string | null>(null);
 
+  // Limit Check
+  const [isLimitReached, setIsLimitReached] = useState(false);
+
   // Job Data
   const [sessionId] = useState<string>(() => crypto.randomUUID());
   const [jobDetails, setJobDetails] = useState<JobDetails>({});
@@ -36,7 +41,8 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   const [settings, setSettings] = useState<AppSettings>({
     companyName: 'MoveMate AI',
     adminEmail: DEFAULT_ADMIN_EMAIL,
-    crmConfig: { provider: null, isConnected: false, apiKey: '' }
+    crmConfig: { provider: null, isConnected: false, apiKey: '' },
+    primaryColor: '#2563eb'
   });
 
   // Data Loading
@@ -52,33 +58,66 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
 
   // --- 1. Initialization (Deep Link + Auth) ---
   useEffect(() => {
-    // Check for Deep Link (?cid=... or ?slug=...)
+    // Check for Deep Link (?cid=... or #slug)
     const params = new URLSearchParams(window.location.search);
     const companyId = params.get('cid');
-    // Prioritize prop slug (from router) over query param slug
-    const companySlug = initialSlug || params.get('slug');
+    
+    // Read slug from hash (remove leading #) or query param
+    const hashSlug = window.location.hash.replace(/^#/, '');
+    const companySlug = initialSlug || hashSlug || params.get('slug');
     
     if (companyId) {
         // DB-based Company Lookup
         dbService.getCompanyPublicProfile(companyId).then(profile => {
             if (profile) {
+                // Check usage limits
+                if (profile.usageLimit !== null && profile.usageLimit !== undefined) {
+                    if ((profile.usageCount || 0) >= profile.usageLimit) {
+                        setIsLimitReached(true);
+                        return; // Stop loading settings
+                    }
+                }
+
                 setSettings({
                     companyName: profile.name,
                     adminEmail: profile.adminEmail,
-                    crmConfig: profile.crmConfig
+                    crmConfig: profile.crmConfig,
+                    primaryColor: profile.primaryColor,
+                    logoUrl: profile.logoUrl
                 });
             }
         });
     } else if (companySlug) {
-        // Config-based Company Lookup
-        const configProfile = getCompanyBySlug(companySlug);
-        if (configProfile) {
-            setSettings({
-                companyName: configProfile.name,
-                adminEmail: configProfile.destinationEmail,
-                crmConfig: { provider: null, isConnected: false, apiKey: '' } // Config file doesn't have CRM yet
-            });
-        }
+        // 1. Try DB Lookup First (for registered companies using short links)
+        dbService.getCompanyBySlug(companySlug).then(profile => {
+            if (profile) {
+                 if (profile.usageLimit !== null && profile.usageLimit !== undefined) {
+                    if ((profile.usageCount || 0) >= profile.usageLimit) {
+                        setIsLimitReached(true);
+                        return;
+                    }
+                }
+                setSettings({
+                    companyName: profile.name,
+                    adminEmail: profile.adminEmail,
+                    crmConfig: profile.crmConfig,
+                    primaryColor: profile.primaryColor,
+                    logoUrl: profile.logoUrl
+                });
+            } else {
+                 // 2. Fallback to Config (for static companies)
+                const configProfile = getCompanyBySlug(companySlug);
+                if (configProfile) {
+                    setSettings({
+                        companyName: configProfile.name,
+                        adminEmail: configProfile.destinationEmail,
+                        crmConfig: { provider: null, isConnected: false, apiKey: '' },
+                        primaryColor: configProfile.primaryColor,
+                        logoUrl: configProfile.logoUrl
+                    });
+                }
+            }
+        });
     }
 
     if (dbService.isOffline()) return;
@@ -100,7 +139,9 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
                             setSettings({
                                 companyName: companyData.name,
                                 adminEmail: companyData.admin_email,
-                                crmConfig: companyData.crm_config || { provider: null, isConnected: false }
+                                crmConfig: companyData.crm_config || { provider: null, isConnected: false },
+                                primaryColor: companyData.primary_color,
+                                logoUrl: companyData.logo_url
                             });
                         }
                         setView('COMPANY_DASHBOARD');
@@ -175,7 +216,9 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
                     setSettings({
                         companyName: company.name,
                         adminEmail: company.adminEmail,
-                        crmConfig: company.crmConfig
+                        crmConfig: company.crmConfig,
+                        primaryColor: company.primaryColor,
+                        logoUrl: company.logoUrl
                     });
                     setView('COMPANY_DASHBOARD');
                 }
@@ -232,7 +275,8 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
     setSettings({
         companyName: 'MoveMate AI',
         adminEmail: DEFAULT_ADMIN_EMAIL,
-        crmConfig: { provider: null, isConnected: false, apiKey: '' }
+        crmConfig: { provider: null, isConnected: false, apiKey: '' },
+        primaryColor: '#2563eb'
     });
     setView('INVENTORY');
     
@@ -265,7 +309,12 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
     // 2. Persist to DB
     if (currentCompanyId) {
         try {
-            await dbService.updateCompanySettings(currentCompanyId, newSettings.adminEmail, newSettings.crmConfig);
+            await dbService.updateCompanySettings(currentCompanyId, {
+                adminEmail: newSettings.adminEmail,
+                crmConfig: newSettings.crmConfig,
+                primaryColor: newSettings.primaryColor,
+                logoUrl: newSettings.logoUrl
+            });
         } catch (e) {
             console.error("Failed to save settings to DB:", e);
             setError("Settings could not be saved. Please check your connection.");
@@ -410,6 +459,29 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
     .filter(i => i.category !== 'Box')
     .reduce((acc, i) => acc + i.quantity, 0);
 
+  // --- Limit Reached View ---
+  if (isLimitReached) {
+      return (
+          <div className="min-h-screen bg-slate-100 dark:bg-slate-900 flex flex-col items-center justify-center p-6 text-center">
+              <div className="bg-white dark:bg-slate-800 p-8 rounded-2xl shadow-xl max-w-md w-full border border-slate-200 dark:border-slate-700">
+                  <div className="w-20 h-20 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6">
+                      <Ban size={40} />
+                  </div>
+                  <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Access Limit Reached</h1>
+                  <p className="text-slate-500 dark:text-slate-400 mb-8">
+                      The intake link for this company has reached its usage limit. Please contact the administrator.
+                  </p>
+                  <button 
+                     onClick={() => window.location.href = '/'}
+                     className="w-full py-3 bg-slate-900 dark:bg-slate-700 text-white rounded-xl font-medium"
+                  >
+                      Go Home
+                  </button>
+              </div>
+          </div>
+      );
+  }
+
   // --- View Routing ---
 
   if (view === 'LOGIN') {
@@ -425,17 +497,23 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
 
   const SuperAdminWrapper = () => {
     const [compList, setCompList] = useState<CompanyProfile[]>([]);
+    
+    // Add callback to update company list instantly
+    const refreshList = async () => {
+         const list = await dbService.getAllCompanies();
+         setCompList(list);
+    };
+
     useEffect(() => {
-        dbService.getAllCompanies().then(setCompList);
+        refreshList();
     }, []);
 
     return (
         <SuperAdminDashboard 
             companies={compList}
-            onAddCompany={async (c) => { 
-                await dbService.getAllCompanies().then(setCompList);
-            }}
-            onDeleteCompany={(id) => { handleDeleteCompany(id); setCompList(prev => prev.filter(p => p.id !== id)); }}
+            onAddCompany={refreshList}
+            onDeleteCompany={async (id) => { await handleDeleteCompany(id); refreshList(); }}
+            onUpdateCompany={refreshList}
             onLogout={handleLogout}
         />
     );
@@ -464,7 +542,7 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
         <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex flex-col">
             <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-              <Truck className="text-blue-600 dark:text-blue-500" size={24} /> {settings.companyName}
+              <Truck style={{ color: settings.primaryColor }} size={24} /> {settings.companyName}
               {dbService.isOffline() && (
                  <button 
                    onClick={() => setShowDbSetup(true)}
@@ -516,15 +594,7 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
                   Only shows if items exist, replaces the helper text. 
                 */}
                 {items.length > 0 ? (
-                   <div className="mb-4 bg-slate-900 dark:bg-slate-800 text-white rounded-xl p-4 shadow-lg grid grid-cols-4 gap-2 animate-in slide-in-from-top-2">
-                        <div className="flex flex-col items-center border-r border-slate-700">
-                            <div className="text-xs text-slate-400 flex items-center gap-1 mb-1"><Box size={12}/> Vol</div>
-                            <div className="font-bold text-sm sm:text-lg">{Math.round(totalVol)} <span className="text-[10px] font-normal text-slate-500">cf</span></div>
-                        </div>
-                        <div className="flex flex-col items-center border-r border-slate-700">
-                             <div className="text-xs text-slate-400 flex items-center gap-1 mb-1"><Scale size={12}/> Wgt</div>
-                            <div className="font-bold text-sm sm:text-lg">{Math.round(totalWt)} <span className="text-[10px] font-normal text-slate-500">lbs</span></div>
-                        </div>
+                   <div className="mb-4 bg-slate-900 dark:bg-slate-800 text-white rounded-xl p-4 shadow-lg grid grid-cols-2 gap-2 animate-in slide-in-from-top-2">
                         <div className="flex flex-col items-center border-r border-slate-700">
                              <div className="text-xs text-slate-400 flex items-center gap-1 mb-1"><Package size={12}/> Bx</div>
                             <div className="font-bold text-sm sm:text-lg">{boxCount}</div>

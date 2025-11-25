@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { InventoryItem, CRMConfig, JobDetails, PackingRequirements } from '../types';
-import { Send, FileText, Scale, Box, Download, X, Mail, CheckCircle2, CloudLightning, Truck, Hash, User, Calendar, ArrowRight, PackageOpen, PenLine, Package } from 'lucide-react';
+import { Send, FileText, Scale, Box, X, Mail, CheckCircle2, CloudLightning, Truck, Hash, User, Calendar, ArrowRight, PackageOpen, PenLine, Package } from 'lucide-react';
 import { dbService } from '../services/dbService';
 
 interface SummaryPanelProps {
@@ -152,50 +152,6 @@ ${packingText}
     setShowConfirmation(false);
   };
 
-  const handleExportCSV = () => {
-    const headers = ["Item Name", "Category", "Tags", "Quantity", "Unit Volume (cf)", "Unit Weight (lbs)", "Total Volume (cf)", "Total Weight (lbs)"];
-    
-    const rows = selectedItems.map(item => [
-        `"${item.name.replace(/"/g, '""')}"`, // Escape quotes
-        item.category,
-        `"${item.tags.join(', ')}"`,
-        item.quantity,
-        item.volumeCuFt,
-        item.weightLbs,
-        (item.volumeCuFt * item.quantity).toFixed(2),
-        (item.weightLbs * item.quantity).toFixed(2)
-    ]);
-
-    const packingSection = jobDetails.packingReqs ? [
-        "",
-        "PACKING MATERIALS REQUESTED",
-        `TV Boxes: ${jobDetails.packingReqs.tvBox}`,
-        `Wardrobe Boxes: ${jobDetails.packingReqs.wardrobeBox}`,
-        `Mirror Boxes: ${jobDetails.packingReqs.mirrorBox}`,
-        `Mattress Covers: ${jobDetails.packingReqs.mattressCover}`,
-        `NOTES / DISASSEMBLY INSTRUCTIONS: "${jobDetails.packingReqs.generalNotes.replace(/"/g, '""')}"`
-    ] : [];
-
-    const csvContent = [
-        `Job Details: ${getJobHeader()}`,
-        `Summary: Boxes=${boxCount}, Other Items=${otherCount}, Total Volume=${totalVolume.toFixed(2)}cf, Total Weight=${totalWeight.toFixed(2)}lbs`,
-        headers.join(','),
-        ...rows.map(row => row.join(',')),
-        ...packingSection
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    const filenameId = jobDetails.jobId || jobDetails.customerName?.replace(/\s+/g, '_') || 'unknown';
-    link.setAttribute('download', `inventory_${filenameId}_${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
   const handleCRMSync = async () => {
     setSyncStatus('syncing');
 
@@ -213,14 +169,6 @@ ${packingText}
         };
 
         // 2. Save to Database (for Admin Stats)
-        // Note: We need the company ID. 
-        // If this is guest mode, we try to get it from the URL params or settings context if we had access.
-        // For now, we assume DBService can handle saving or we grab from current context.
-        // A robust app would pass companyId into SummaryPanel.
-        // * Assuming dbService.createJob can handle it or we skip if no company ID context *
-        
-        // Let's try to fetch the active company ID from the URL query param 'cid' for now, 
-        // as that's how Guests are identified.
         const cid = new URLSearchParams(window.location.search).get('cid');
         if (cid) {
             payload.company_id = cid;
@@ -270,15 +218,7 @@ ${packingText}
         <div className="max-w-2xl mx-auto">
             
             <div className="flex justify-between items-end mb-4">
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full mr-4 opacity-50 grayscale text-[10px] sm:text-xs">
-                    <div className="flex flex-col">
-                        <span className="text-slate-500 dark:text-slate-400 flex items-center gap-1"><Box size={10}/> Vol</span>
-                        <span className="font-bold text-slate-800 dark:text-slate-200 text-sm">{Math.round(totalVolume)} <span className="font-normal text-slate-500">cf</span></span>
-                    </div>
-                    <div className="flex flex-col">
-                        <span className="text-slate-500 dark:text-slate-400 flex items-center gap-1"><Scale size={10}/> Wgt</span>
-                        <span className="font-bold text-slate-800 dark:text-slate-200 text-sm">{Math.round(totalWeight)} <span className="font-normal text-slate-500">lbs</span></span>
-                    </div>
+                <div className="grid grid-cols-2 gap-2 w-full mr-4 opacity-50 grayscale text-[10px] sm:text-xs">
                     <div className="flex flex-col">
                         <span className="text-slate-500 dark:text-slate-400 flex items-center gap-1"><Package size={10}/> Bx</span>
                         <span className="font-bold text-slate-800 dark:text-slate-200 text-sm">{boxCount}</span>
@@ -310,7 +250,7 @@ ${packingText}
                     <div className="p-5 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-850">
                         <h3 className="text-lg font-bold text-slate-800 dark:text-white">
                             {modalStep === 'DETAILS' ? 'Job Information' : 
-                             modalStep === 'PACKING' ? 'Packing Requirements' : 'Review & Export'}
+                             modalStep === 'PACKING' ? 'Packing Requirements' : 'Review & Send'}
                         </h3>
                         <button onClick={() => setShowConfirmation(false)} className="text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 p-1 rounded-full transition">
                             <X size={20} />
@@ -501,21 +441,13 @@ ${packingText}
                                     <h4 className="text-sm font-semibold text-blue-900 dark:text-blue-300 mb-3 flex items-center gap-2">
                                         <CheckCircle2 size={16} className="text-blue-600 dark:text-blue-400"/> Manifest Summary
                                     </h4>
-                                    <div className="grid grid-cols-4 gap-2 text-center">
-                                        <div className="bg-white dark:bg-slate-800 p-2 rounded-lg shadow-sm">
-                                            <div className="text-[10px] text-slate-500 uppercase font-bold">Vol (cf)</div>
-                                            <div className="text-lg font-bold text-slate-800 dark:text-white">{Math.round(totalVolume)}</div>
-                                        </div>
-                                        <div className="bg-white dark:bg-slate-800 p-2 rounded-lg shadow-sm">
-                                            <div className="text-[10px] text-slate-500 uppercase font-bold">Weight</div>
-                                            <div className="text-lg font-bold text-slate-800 dark:text-white">{Math.round(totalWeight)}</div>
-                                        </div>
+                                    <div className="grid grid-cols-2 gap-2 text-center">
                                         <div className="bg-white dark:bg-slate-800 p-2 rounded-lg shadow-sm">
                                             <div className="text-[10px] text-slate-500 uppercase font-bold">Boxes</div>
                                             <div className="text-lg font-bold text-slate-800 dark:text-white">{boxCount}</div>
                                         </div>
                                         <div className="bg-white dark:bg-slate-800 p-2 rounded-lg shadow-sm">
-                                            <div className="text-[10px] text-slate-500 uppercase font-bold">Other</div>
+                                            <div className="text-[10px] text-slate-500 uppercase font-bold">Other Items</div>
                                             <div className="text-lg font-bold text-slate-800 dark:text-white">{otherCount}</div>
                                         </div>
                                     </div>
@@ -551,13 +483,6 @@ ${packingText}
                                         className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold shadow-lg shadow-blue-100 dark:shadow-blue-900/30 flex items-center justify-center gap-2 transition-all active:scale-95"
                                     >
                                         <Mail size={20} /> Send via Email
-                                    </button>
-
-                                    <button 
-                                        onClick={handleExportCSV}
-                                        className="w-full py-3 px-4 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-600 hover:border-slate-300 rounded-xl font-semibold flex items-center justify-center gap-2 transition-all active:scale-95"
-                                    >
-                                        <Download size={20} /> Export to CSV
                                     </button>
                                 </div>
                             </div>

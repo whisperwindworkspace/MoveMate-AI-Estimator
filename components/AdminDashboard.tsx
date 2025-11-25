@@ -1,7 +1,8 @@
 
+
 import React, { useState, useEffect } from 'react';
 import { AppSettings, CRMConfig, JobRecord } from '../types';
-import { Settings, LogOut, Mail, CloudLightning, Save, CheckCircle, BarChart3, Calendar, Loader2, QrCode, Copy, ExternalLink } from 'lucide-react';
+import { Settings, LogOut, Mail, CloudLightning, Save, CheckCircle, BarChart3, Calendar, Loader2, QrCode, Copy, ExternalLink, Palette } from 'lucide-react';
 import CRMConfigModal from './CRMConfigModal';
 import { dbService } from '../services/dbService';
 import { getUserProfile, getCurrentSession } from '../services/authService';
@@ -15,14 +16,17 @@ interface AdminDashboardProps {
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ settings, onUpdateSettings, onLogout }) => {
   const [email, setEmail] = useState(settings.adminEmail);
+  const [primaryColor, setPrimaryColor] = useState(settings.primaryColor || '#2563eb');
+  
   const [isSaved, setIsSaved] = useState(false);
-  const [isSavingEmail, setIsSavingEmail] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [showCRM, setShowCRM] = useState(false);
   
   const [stats, setStats] = useState<JobRecord[]>([]);
   const [loadingStats, setLoadingStats] = useState(true);
   
   const [companyId, setCompanyId] = useState<string | null>(null);
+  const [companySlug, setCompanySlug] = useState<string | null>(null);
   const [showQr, setShowQr] = useState(false);
 
   useEffect(() => {
@@ -33,6 +37,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ settings, onUpdateSetti
                 const profile = await getUserProfile(session.user.id);
                 if (profile) {
                     setCompanyId(profile.company_id);
+                    const companyData = Array.isArray(profile.companies) ? profile.companies[0] : profile.companies;
+                    if (companyData && companyData.slug) {
+                        setCompanySlug(companyData.slug);
+                    }
+                    if (companyData?.primary_color) {
+                        setPrimaryColor(companyData.primary_color);
+                    }
+
                     const jobs = await dbService.getCompanyJobs(profile.company_id);
                     setStats(jobs);
                 }
@@ -46,20 +58,21 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ settings, onUpdateSetti
     fetchStats();
   }, []);
 
-  const handleSaveEmail = async () => {
-    setIsSavingEmail(true);
+  const handleSaveSettings = async () => {
+    setIsSaving(true);
     try {
         await onUpdateSettings({
             ...settings,
-            adminEmail: email
+            adminEmail: email,
+            primaryColor: primaryColor
         });
         setIsSaved(true);
         setTimeout(() => setIsSaved(false), 2000);
     } catch (error) {
-        console.error("Failed to save email:", error);
+        console.error("Failed to save settings:", error);
         alert("Failed to save settings. Please try again.");
     } finally {
-        setIsSavingEmail(false);
+        setIsSaving(false);
     }
   };
 
@@ -75,6 +88,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ settings, onUpdateSetti
         alert("Failed to save CRM settings.");
     }
   };
+
+  // Use Hash URL format /#slug (No trailing slash)
+  const shareUrl = companySlug 
+    ? `${window.location.origin}/#${companySlug}` 
+    : `${window.location.origin}/?cid=${companyId}`;
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -166,17 +184,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ settings, onUpdateSetti
                         <p className="text-sm text-slate-600">Share this link with customers to start a branded inventory session.</p>
                         <div className="flex gap-2">
                             <code className="flex-1 p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs font-mono break-all text-slate-700 flex items-center">
-                                {`${window.location.origin}/?cid=${companyId}`}
+                                {shareUrl}
                             </code>
                             <button 
-                                onClick={() => navigator.clipboard.writeText(`${window.location.origin}/?cid=${companyId}`)}
+                                onClick={() => navigator.clipboard.writeText(shareUrl)}
                                 className="p-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600 border border-slate-200"
                                 title="Copy Link"
                             >
                                 <Copy size={18} />
                             </button>
                             <a 
-                                href={`/?cid=${companyId}`} 
+                                href={shareUrl} 
                                 target="_blank" 
                                 rel="noreferrer"
                                 className="p-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600 border border-slate-200"
@@ -190,8 +208,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ settings, onUpdateSetti
                             <div className="flex justify-center mt-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
                                 <CompanyQrCard 
                                     name={settings.companyName} 
-                                    url={`${window.location.origin}/?cid=${companyId}`} 
+                                    url={shareUrl} 
                                     description="Scan to start inventory"
+                                    color={primaryColor}
                                 />
                             </div>
                         )}
@@ -204,41 +223,56 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ settings, onUpdateSetti
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Email Config */}
+                {/* Branding & Settings */}
                 <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-full">
                     <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                        <Mail size={20} className="text-slate-400" /> Notification Settings
+                        <Palette size={20} className="text-slate-400" /> Branding & Settings
                     </h3>
-                    <div className="space-y-4">
+                    <div className="space-y-6">
                         <div>
                             <label className="block text-sm font-medium text-slate-700 mb-1">Destination Email</label>
-                            <p className="text-xs text-slate-500 mb-2">Inventory manifests will be sent to this address.</p>
-                            <div className="flex gap-2">
+                            <input 
+                                type="email" 
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 mb-1"
+                                placeholder="dispatch@company.com"
+                            />
+                            <p className="text-xs text-slate-500">Inventory manifests will be sent here.</p>
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-2">Brand Color</label>
+                            <div className="flex items-center gap-3">
                                 <input 
-                                    type="email" 
-                                    value={email}
-                                    onChange={(e) => setEmail(e.target.value)}
-                                    className="flex-1 p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                    type="color" 
+                                    value={primaryColor}
+                                    onChange={(e) => setPrimaryColor(e.target.value)}
+                                    className="w-12 h-12 p-1 rounded-lg border border-slate-200 cursor-pointer"
                                 />
-                                <button 
-                                    onClick={handleSaveEmail}
-                                    disabled={isSavingEmail}
-                                    className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition-all ${
-                                        isSaved 
-                                        ? 'bg-green-100 text-green-700' 
-                                        : 'bg-blue-600 text-white hover:bg-blue-700'
-                                    } ${isSavingEmail ? 'opacity-75 cursor-wait' : ''}`}
-                                >
-                                    {isSavingEmail ? (
-                                        <Loader2 size={18} className="animate-spin" />
-                                    ) : isSaved ? (
-                                        <><CheckCircle size={18}/> Saved</>
-                                    ) : (
-                                        <><Save size={18}/> Save</>
-                                    )}
-                                </button>
+                                <div className="text-xs text-slate-500">
+                                    This color will be used for the QR code and app header.
+                                </div>
                             </div>
                         </div>
+
+                        <button 
+                            onClick={handleSaveSettings}
+                            disabled={isSaving}
+                            className={`w-full px-4 py-2 rounded-lg font-medium flex items-center justify-center gap-2 transition-all ${
+                                isSaved 
+                                ? 'bg-green-100 text-green-700' 
+                                : 'bg-blue-600 text-white hover:bg-blue-700'
+                            } ${isSaving ? 'opacity-75 cursor-wait' : ''}`}
+                        >
+                            {isSaving ? (
+                                <Loader2 size={18} className="animate-spin" />
+                            ) : isSaved ? (
+                                <><CheckCircle size={18}/> Settings Saved</>
+                            ) : (
+                                <><Save size={18}/> Save Changes</>
+                            )}
+                        </button>
                     </div>
                 </div>
 

@@ -1,55 +1,89 @@
-import React, { useState } from 'react';
+
+
+import React, { useMemo, useState } from 'react';
 import { CompanyProfile } from '../types';
 import { dbService } from '../services/dbService';
 import { signUpWithEmail } from '../services/authService';
 import { COMPANIES } from '../config/companies';
 import { CompanyQrCard } from './CompanyQrCard';
-import DatabaseSetupModal from './DatabaseSetupModal';
-import {
-  Shield,
-  Plus,
-  Trash2,
-  LogOut,
-  Building,
-  User,
-  Loader2,
-  Database,
-  QrCode,
-  X,
-} from 'lucide-react';
+import { Shield, Plus, Trash2, LogOut, Building, User, Loader2, QrCode, X, Edit2, Check, Infinity } from 'lucide-react';
 
 interface SuperAdminDashboardProps {
   companies: CompanyProfile[];
   onAddCompany: (company: CompanyProfile) => void;
   onDeleteCompany: (id: string) => void;
+  onUpdateCompany: () => void;
   onLogout: () => void;
 }
+
+const slugify = (s: string) =>
+  s
+    .toLowerCase()
+    .trim()
+    .replace(/['"]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 
 const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   companies,
   onAddCompany,
   onDeleteCompany,
-  onLogout,
+  onUpdateCompany,
+  onLogout
 }) => {
   const [showAddForm, setShowAddForm] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'DB' | 'QR'>('DB');
-  const [showDbSetup, setShowDbSetup] = useState(false);
 
-  // QR modal state for DB-backed companies
   const [qrModalOpen, setQrModalOpen] = useState(false);
-  const [selectedQrCompany, setSelectedQrCompany] = useState<{
-    name: string;
-    url: string;
-  } | null>(null);
+  const [selectedQrCompany, setSelectedQrCompany] = useState<CompanyProfile | null>(null);
+  
+  // Inline editing state for limits
+  const [editingLimitId, setEditingLimitId] = useState<string | null>(null);
+  const [tempLimit, setTempLimit] = useState<string>('');
+
+  const baseUrl = useMemo(() => {
+    if (typeof window === 'undefined') return 'https://app.movemate.ai';
+    return window.location.origin;
+  }, []);
 
   const [newCompany, setNewCompany] = useState({
     name: '',
     email: '',
     password: '',
     adminEmail: '',
+    usageLimit: ''
   });
+
+  const openQrModal = (comp: CompanyProfile) => {
+    setSelectedQrCompany(comp);
+    setQrModalOpen(true);
+  };
+
+  const closeQrModal = () => {
+    setQrModalOpen(false);
+    setSelectedQrCompany(null);
+  };
+
+  const handleEditLimit = (comp: CompanyProfile) => {
+      setEditingLimitId(comp.id);
+      setTempLimit(comp.usageLimit ? comp.usageLimit.toString() : '');
+  };
+
+  const handleSaveLimit = async (id: string) => {
+      try {
+        const limitVal = tempLimit.trim() === '' ? null : parseInt(tempLimit);
+        await dbService.updateCompanyLimit(id, limitVal);
+        setEditingLimitId(null);
+        if (onUpdateCompany) {
+            onUpdateCompany();
+        }
+      } catch (e) {
+          console.error("Failed to update limit", e);
+          alert("Failed to update usage limit");
+      }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,13 +93,18 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
     setError('');
 
     try {
-      // 1. Create company profile in DB
+      const computedSlug = slugify(newCompany.name);
+      const limit = newCompany.usageLimit.trim() === '' ? null : parseInt(newCompany.usageLimit);
+
       const companyPayload: Partial<CompanyProfile> = {
         name: newCompany.name,
+        slug: computedSlug,
         adminEmail: newCompany.adminEmail || newCompany.email,
         crmConfig: { provider: null, isConnected: false, apiKey: '' },
-        username: newCompany.email, // legacy compatibility
-        password: newCompany.password, // legacy compatibility
+        username: newCompany.email,   // legacy compat only
+        password: newCompany.password, // legacy compat only
+        usageLimit: limit,
+        primaryColor: '#2563eb' // Default blue
       };
 
       const createdCompany = await dbService.createCompany(companyPayload);
@@ -74,18 +113,13 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
         throw new Error('Failed to create company profile.');
       }
 
-      // 2. Register auth user (only when online)
       if (!dbService.isOffline()) {
-        await signUpWithEmail(
-          newCompany.email,
-          newCompany.password,
-          createdCompany.id,
-        );
+        await signUpWithEmail(newCompany.email, newCompany.password, createdCompany.id);
       }
 
       onAddCompany(createdCompany as CompanyProfile);
       setShowAddForm(false);
-      setNewCompany({ name: '', email: '', password: '', adminEmail: '' });
+      setNewCompany({ name: '', email: '', password: '', adminEmail: '', usageLimit: '' });
     } catch (err: any) {
       console.error('Creation error', err);
       setError(err.message || 'Failed to create company and user.');
@@ -94,334 +128,275 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
     }
   };
 
-  /**
-   * Build an intake URL for a DB company.
-   * Priority:
-   *   1) company.slug  -> /c/<slug>
-   *   2) company.id    -> /?cid=<id>  (legacy fallback)
-   */
-  const openQrModal = (company: CompanyProfile) => {
-    const baseUrl = window.location.origin;
-
-    const slug = (company as any).slug as string | undefined;
-    const id = company?.id;
-
-    const link = slug
-      ? `${baseUrl}/c/${slug}`
-      : id
-      ? `${baseUrl}/?cid=${id}`
-      : null;
-
-    if (!link) {
-      console.error('QR generation failed: company has no slug or id');
-      return;
-    }
-
-    setSelectedQrCompany({ name: company.name, url: link });
-    setQrModalOpen(true);
-  };
-
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100">
-      {/* HEADER */}
       <header className="bg-slate-800 border-b border-slate-700 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-2 font-bold text-lg text-purple-400">
-          <Shield className="w-5 h-5" />
-          <span>Super Admin Console</span>
+          <Shield /> Super Admin Console
         </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowDbSetup(true)}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-600 text-sm text-slate-200 hover:bg-slate-700 hover:border-purple-500 transition-colors"
-          >
-            <Database size={16} /> System Setup
-          </button>
-          <button
-            onClick={onLogout}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-red-500/60 text-sm text-red-300 hover:bg-red-600/10 hover:border-red-400 transition-colors"
-          >
-            <LogOut size={16} /> Logout
-          </button>
-        </div>
+        <button
+          onClick={onLogout}
+          className="text-slate-400 hover:text-white flex items-center gap-1 text-sm font-medium transition-colors"
+        >
+          <LogOut size={16} /> Logout
+        </button>
       </header>
 
-      {/* MAIN CONTENT */}
-      <main className="max-w-6xl mx-auto px-4 py-8 space-y-8">
+      <main className="max-w-6xl mx-auto p-6">
         {/* Tabs */}
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex gap-6 border-b border-slate-700">
-            <button
-              onClick={() => setActiveTab('DB')}
-              className={`pb-2 px-2 text-sm font-medium transition-colors ${
-                activeTab === 'DB'
-                  ? 'text-purple-400 border-b-2 border-purple-400'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Database Companies
-            </button>
-            <button
-              onClick={() => setActiveTab('QR')}
-              className={`pb-2 px-2 text-sm font-medium transition-colors ${
-                activeTab === 'QR'
-                  ? 'text-purple-400 border-b-2 border-purple-400'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Legacy/Static Config Links
-            </button>
-          </div>
-
-          {activeTab === 'DB' && (
-            <button
-              onClick={() => setShowAddForm((v) => !v)}
-              className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-sm font-medium px-3 py-2 rounded-lg shadow-sm shadow-purple-900/40"
-            >
-              <Plus size={16} /> Add Company
-            </button>
-          )}
+        <div className="flex gap-4 mb-6 border-b border-slate-700 pb-1">
+          <button
+            onClick={() => setActiveTab('DB')}
+            className={`pb-2 px-2 text-sm font-medium transition-colors ${
+              activeTab === 'DB'
+                ? 'text-purple-400 border-b-2 border-purple-400'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Database Companies
+          </button>
+          <button
+            onClick={() => setActiveTab('QR')}
+            className={`pb-2 px-2 text-sm font-medium transition-colors ${
+              activeTab === 'QR'
+                ? 'text-purple-400 border-b-2 border-purple-400'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Static Intake Links (Config)
+          </button>
         </div>
 
-        {/* DB TAB */}
         {activeTab === 'DB' && (
           <>
-            {/* Add company form */}
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-semibold">Registered Companies</h2>
+              <button
+                onClick={() => setShowAddForm(true)}
+                className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition"
+              >
+                <Plus size={18} /> Add Company
+              </button>
+            </div>
+
             {showAddForm && (
-              <section className="bg-slate-800/80 border border-slate-700 rounded-xl p-5 mb-6">
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="font-semibold text-lg">Onboard New Company</h2>
-                  <button
-                    onClick={() => setShowAddForm(false)}
-                    className="text-slate-400 hover:text-slate-100"
-                  >
-                    <X size={18} />
-                  </button>
-                </div>
-
-                {error && (
-                  <div className="mb-3 text-sm text-red-400 bg-red-950/40 border border-red-700/60 rounded p-2">
-                    {error}
-                  </div>
-                )}
-
-                <form
-                  onSubmit={handleSubmit}
-                  className="grid grid-cols-2 gap-4 text-sm"
-                >
+              <div className="bg-slate-800 rounded-xl p-6 mb-8 border border-slate-700 animate-in slide-in-from-top-2">
+                <h3 className="text-lg font-bold mb-4 text-purple-300">New Company Profile</h3>
+                {error && <div className="text-red-400 text-sm mb-4">{error}</div>}
+                <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-4">
                   <div className="col-span-2">
-                    <label className="text-xs text-slate-400 uppercase font-semibold">
-                      Company Name
-                    </label>
+                    <label className="text-xs text-slate-400 uppercase font-bold">Company Name</label>
                     <input
-                      required
-                      placeholder="Acme Moving Co"
+                      placeholder="e.g. Acme Moving"
                       value={newCompany.name}
-                      onChange={(e) =>
-                        setNewCompany({ ...newCompany, name: e.target.value })
-                      }
-                      className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:border-purple-500 outline-none"
+                      onChange={e => setNewCompany({ ...newCompany, name: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-sm focus:border-purple-500 outline-none mt-1"
                     />
                   </div>
-
                   <div>
-                    <label className="text-xs text-slate-400 uppercase font-semibold">
-                      Admin Login Email
-                    </label>
+                    <label className="text-xs text-slate-400 uppercase font-bold">Admin Email (Login)</label>
                     <input
-                      required
-                      type="email"
                       placeholder="admin@acme.com"
+                      type="email"
                       value={newCompany.email}
-                      onChange={(e) =>
-                        setNewCompany({ ...newCompany, email: e.target.value })
-                      }
-                      className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:border-purple-500 outline-none"
+                      onChange={e => setNewCompany({ ...newCompany, email: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-sm focus:border-purple-500 outline-none mt-1"
                     />
                   </div>
-
                   <div>
-                    <label className="text-xs text-slate-400 uppercase font-semibold">
-                      Temporary Password
-                    </label>
+                    <label className="text-xs text-slate-400 uppercase font-bold">Password</label>
                     <input
-                      required
+                      placeholder="••••••••"
                       type="password"
-                      placeholder="One-time setup password"
                       value={newCompany.password}
-                      onChange={(e) =>
-                        setNewCompany({
-                          ...newCompany,
-                          password: e.target.value,
-                        })
-                      }
-                      className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:border-purple-500 outline-none"
+                      onChange={e => setNewCompany({ ...newCompany, password: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-sm focus:border-purple-500 outline-none mt-1"
                     />
                   </div>
-
-                  <div className="col-span-2">
-                    <label className="text-xs text-slate-400 uppercase font-semibold">
-                      Dispatch / Manifest Email (optional)
-                    </label>
+                  
+                  <div>
+                    <label className="text-xs text-slate-400 uppercase font-bold">Dispatch Email</label>
                     <input
                       placeholder="dispatch@acme.com"
                       value={newCompany.adminEmail}
-                      onChange={(e) =>
-                        setNewCompany({
-                          ...newCompany,
-                          adminEmail: e.target.value,
-                        })
-                      }
-                      className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:border-purple-500 outline-none"
+                      onChange={e => setNewCompany({ ...newCompany, adminEmail: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-sm focus:border-purple-500 outline-none mt-1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 uppercase font-bold">Usage Limit (Jobs)</label>
+                    <input
+                      placeholder="Leave empty for unlimited"
+                      type="number"
+                      value={newCompany.usageLimit}
+                      onChange={e => setNewCompany({ ...newCompany, usageLimit: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-sm focus:border-purple-500 outline-none mt-1"
                     />
                   </div>
 
-                  <div className="col-span-2 flex justify-end gap-2 mt-2">
+                  <div className="col-span-2 flex justify-end gap-2 mt-4">
                     <button
                       type="button"
                       onClick={() => setShowAddForm(false)}
-                      className="px-4 py-2 text-slate-400 hover:text-slate-100"
+                      className="px-4 py-2 text-slate-400 hover:text-white"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
                       disabled={isLoading}
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="px-6 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg font-bold flex items-center gap-2"
                     >
-                      {isLoading && <Loader2 size={16} className="animate-spin" />}
-                      <span>Create Company</span>
+                      {isLoading && <Loader2 className="animate-spin" size={16} />}
+                      Create & Register
                     </button>
                   </div>
                 </form>
-              </section>
+              </div>
             )}
 
-            {/* Companies list */}
-            <section className="bg-slate-800/60 border border-slate-700 rounded-xl p-5">
-              <h2 className="font-semibold mb-4">Registered Companies</h2>
+            <div className="grid gap-4">
+              {companies.map(comp => {
+                const slug = comp.slug || slugify(comp.name) || comp.id;
+                // Update to hash routing URL (Removed /c/)
+                const intakeUrl = `${baseUrl}/#${slug}`;
+                const usage = comp.usageCount || 0;
+                const limit = comp.usageLimit;
+                const isLimitReached = limit !== null && limit !== undefined && usage >= limit;
 
-              {companies.length === 0 && (
-                <p className="text-sm text-slate-400">
-                  No companies found. Use “Add Company” to onboard your first
-                  tenant.
-                </p>
-              )}
-
-              <div className="grid gap-4">
-                {companies.map((comp) => (
+                return (
                   <div
                     key={comp.id}
-                    className="bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 flex justify-between items-center group"
+                    className="bg-slate-800 p-5 rounded-xl border border-slate-700 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 group"
                   >
                     <div>
                       <div className="flex items-center gap-2 mb-1">
                         <Building size={18} className="text-slate-400" />
                         <h3 className="font-bold text-lg">{comp.name}</h3>
-                      </div>
-                      <div className="flex flex-wrap gap-4 text-xs text-slate-400">
-                        <span className="flex items-center gap-1">
-                          <User size={14} /> {comp.username}
-                        </span>
-                        {comp.adminEmail && <span>{comp.adminEmail}</span>}
-                        {comp.crmConfig && (
-                          <span
-                            className={`px-2 py-0.5 rounded-full border ${
-                              comp.crmConfig.isConnected
-                                ? 'border-green-700 text-green-400'
-                                : 'border-slate-600 text-slate-400'
-                            }`}
-                          >
-                            {comp.crmConfig.isConnected
-                              ? comp.crmConfig.provider
-                              : 'No CRM'}
-                          </span>
+                        {isLimitReached && (
+                             <span className="text-[10px] bg-red-900/50 text-red-300 border border-red-800 px-2 py-0.5 rounded font-bold uppercase tracking-wide">
+                                Limit Reached
+                             </span>
                         )}
+                        {comp.primaryColor && comp.primaryColor !== '#2563eb' && (
+                             <span className="w-3 h-3 rounded-full border border-slate-600" style={{ backgroundColor: comp.primaryColor }} title="Brand Color Set"></span>
+                        )}
+                      </div>
+
+                      <div className="flex gap-4 text-sm text-slate-400 flex-wrap items-center">
+                        <span className="flex items-center gap-1">
+                          <User size={14} /> {comp.adminEmail}
+                        </span>
+                        
+                        {/* Usage Limit Display/Edit */}
+                        <div className="flex items-center gap-2 bg-slate-900 px-2 py-1 rounded border border-slate-700">
+                             <span className="text-xs uppercase font-bold text-slate-500">Usage:</span>
+                             <span className={`font-mono ${isLimitReached ? 'text-red-400' : 'text-slate-200'}`}>
+                                {usage} / {editingLimitId === comp.id ? (
+                                    <input 
+                                        type="number" 
+                                        value={tempLimit} 
+                                        onChange={(e) => setTempLimit(e.target.value)}
+                                        className="w-16 bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs text-white"
+                                        placeholder="∞"
+                                        autoFocus
+                                    />
+                                ) : (limit ?? <Infinity size={14} className="inline"/>)}
+                             </span>
+                             
+                             {editingLimitId === comp.id ? (
+                                <button onClick={() => handleSaveLimit(comp.id)} className="text-green-400 hover:text-green-300">
+                                    <Check size={14} />
+                                </button>
+                             ) : (
+                                <button onClick={() => handleEditLimit(comp)} className="text-slate-500 hover:text-purple-400">
+                                    <Edit2 size={12} />
+                                </button>
+                             )}
+                        </div>
+
+                        <span
+                          className={`px-2 py-0.5 rounded text-xs border ${
+                            comp.crmConfig?.isConnected
+                              ? 'border-green-800 text-green-400'
+                              : 'border-slate-600'
+                          }`}
+                        >
+                          {comp.crmConfig?.isConnected ? comp.crmConfig.provider : 'No CRM'}
+                        </span>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 w-full md:w-auto justify-end">
                       <button
                         onClick={() => openQrModal(comp)}
-                        className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition"
-                        title="Generate QR / Intake Link"
+                        className="p-2 text-slate-400 hover:text-purple-300 hover:bg-slate-700 rounded-lg transition"
+                        title="Generate Intake QR"
                       >
                         <QrCode size={20} />
                       </button>
+
                       <button
                         onClick={() => onDeleteCompany(comp.id)}
-                        className="p-2 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded-lg transition"
+                        className="p-2 text-slate-500 hover:text-red-400 hover:bg-slate-700 rounded-lg transition"
                         title="Delete Company"
                       >
                         <Trash2 size={20} />
                       </button>
                     </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          </>
-        )}
 
-        {/* STATIC CONFIG / LEGACY QR TAB */}
-        {activeTab === 'QR' && (
-          <section className="bg-slate-800/60 border border-slate-700 rounded-xl p-5">
-            <div className="flex items-center gap-3 mb-6">
-              <h2 className="text-xl font-semibold">Static Intake Links</h2>
-              <span className="text-xs bg-slate-900 px-2 py-1 rounded text-slate-400 border border-slate-700">
-                Source: config/companies.ts
-              </span>
-            </div>
+                    {/* QR MODAL */}
+                    {qrModalOpen && selectedQrCompany?.id === comp.id && (
+                      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                        <div className="relative bg-slate-900 rounded-2xl border border-slate-700 shadow-2xl w-full max-w-sm p-6">
+                          <button
+                            onClick={closeQrModal}
+                            className="absolute top-3 right-3 bg-white text-slate-900 rounded-full p-1.5 hover:bg-slate-200"
+                          >
+                            <X size={18} />
+                          </button>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {COMPANIES.map((comp) => {
-                const baseUrl = window.location.origin;
-                const url = `${baseUrl}/c/${comp.slug}`;
-
-                return (
-                  <div key={comp.slug} className="relative flex justify-center">
-                    <CompanyQrCard name={comp.name} url={url} />
-                    <button
-                      onClick={() => {
-                        setSelectedQrCompany({ name: comp.name, url });
-                        setQrModalOpen(true);
-                      }}
-                      className="absolute top-2 right-2 bg-slate-900/80 border border-slate-600 rounded-lg p-1.5 hover:bg-slate-700 transition"
-                      title="Enlarge QR"
-                    >
-                      <QrCode
-                        size={16}
-                        className="text-slate-200"
-                      />
-                    </button>
+                          <div className="flex justify-center mt-4">
+                            <CompanyQrCard
+                              name={comp.name}
+                              url={intakeUrl}
+                              description="Customer Intake Link"
+                              color={comp.primaryColor || '#2563eb'}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
-          </section>
+          </>
+        )}
+
+        {activeTab === 'QR' && (
+          <div>
+            <div className="flex items-center gap-3 mb-6">
+              <h2 className="text-xl font-semibold">Static Intake Links</h2>
+              <span className="text-xs bg-slate-800 px-2 py-1 rounded text-slate-400">
+                From config/companies.ts
+              </span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {COMPANIES.map(comp => (
+                <CompanyQrCard 
+                  key={comp.slug} 
+                  name={comp.name}
+                  url={`${baseUrl}/#${comp.slug}`} // Removed /c/ and /#/
+                  description="Scan to start inventory"
+                  color={comp.primaryColor || '#475569'}
+                  logoUrl={comp.logoUrl}
+                />
+              ))}
+            </div>
+          </div>
         )}
       </main>
-
-      {/* DB SETUP MODAL */}
-      {showDbSetup && <DatabaseSetupModal onClose={() => setShowDbSetup(false)} />}
-
-      {/* QR MODAL (shared for DB and static companies) */}
-      {qrModalOpen && selectedQrCompany && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="relative">
-            <button
-              onClick={() => setQrModalOpen(false)}
-              className="absolute -top-3 -right-3 bg-white text-slate-900 rounded-full p-1 shadow-lg hover:bg-slate-200 z-10"
-            >
-              <X size={18} />
-            </button>
-            <CompanyQrCard
-              name={selectedQrCompany.name}
-              url={selectedQrCompany.url}
-              description="Customer Intake Link"
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 };

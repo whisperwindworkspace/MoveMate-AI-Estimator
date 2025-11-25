@@ -1,4 +1,6 @@
 
+
+
 import { supabase } from './supabaseClient';
 import { InventoryItem, CompanyProfile, JobRecord } from '../types';
 
@@ -165,12 +167,28 @@ export const dbService = {
     if (isOfflineMode) {
         const newJob = { ...job, id: crypto.randomUUID(), created_at: new Date().toISOString() };
         memJobs.push(newJob);
+        // Increment usage in memory
+        if (job.company_id) {
+            const comp = memCompanies.find(c => c.id === job.company_id);
+            if (comp) {
+                comp.usage_count = (comp.usage_count || 0) + 1;
+            }
+        }
         return newJob;
     }
 
     try {
         const { data, error } = await supabase.from('jobs').insert(job).select().single();
         if (error) throw error;
+
+        // Increment usage_count on company
+        if (job.company_id) {
+            const { data: comp } = await supabase.from('companies').select('usage_count').eq('id', job.company_id).single();
+            const newCount = (comp?.usage_count || 0) + 1;
+            
+            await supabase.from('companies').update({ usage_count: newCount }).eq('id', job.company_id);
+        }
+
         return data;
     } catch (e) {
         console.error("Create Job Error", e);
@@ -209,7 +227,11 @@ export const dbService = {
             username: found.username,
             password: found.password,
             adminEmail: found.admin_email,
-            crmConfig: found.crm_config
+            crmConfig: found.crm_config,
+            usageLimit: found.usage_limit,
+            usageCount: found.usage_count,
+            primaryColor: found.primary_color,
+            logoUrl: found.logo_url
         };
     }
 
@@ -229,7 +251,11 @@ export const dbService = {
         username: data.username,
         password: data.password,
         adminEmail: data.admin_email,
-        crmConfig: data.crm_config
+        crmConfig: data.crm_config,
+        usageLimit: data.usage_limit,
+        usageCount: data.usage_count,
+        primaryColor: data.primary_color,
+        logoUrl: data.logo_url
       };
     } catch (e) {
       console.error("Login exception:", e);
@@ -247,7 +273,11 @@ export const dbService = {
             username: found.username,
             password: found.password,
             adminEmail: found.admin_email,
-            crmConfig: found.crm_config
+            crmConfig: found.crm_config,
+            usageLimit: found.usage_limit,
+            usageCount: found.usage_count,
+            primaryColor: found.primary_color,
+            logoUrl: found.logo_url
         };
     }
 
@@ -266,10 +296,61 @@ export const dbService = {
             username: data.username,
             password: data.password,
             adminEmail: data.admin_email,
-            crmConfig: data.crm_config || { provider: null, isConnected: false, apiKey: '' }
+            crmConfig: data.crm_config || { provider: null, isConnected: false, apiKey: '' },
+            usageLimit: data.usage_limit,
+            usageCount: data.usage_count,
+            primaryColor: data.primary_color,
+            logoUrl: data.logo_url
         };
     } catch (e) {
         console.error("Get company profile exception:", e);
+        return null;
+    }
+  },
+
+  async getCompanyBySlug(slug: string): Promise<CompanyProfile | null> {
+    if (isOfflineMode) {
+        const found = memCompanies.find(c => c.slug === slug);
+        if (!found) return null;
+        return {
+            id: found.id,
+            name: found.name,
+            slug: found.slug,
+            username: found.username,
+            password: found.password,
+            adminEmail: found.admin_email,
+            crmConfig: found.crm_config,
+            usageLimit: found.usage_limit,
+            usageCount: found.usage_count,
+            primaryColor: found.primary_color,
+            logoUrl: found.logo_url
+        };
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('companies')
+            .select('*')
+            .eq('slug', slug)
+            .single();
+
+        if (error || !data) return null;
+
+        return {
+            id: data.id,
+            name: data.name,
+            slug: data.slug,
+            username: data.username,
+            password: data.password,
+            adminEmail: data.admin_email,
+            crmConfig: data.crm_config || { provider: null, isConnected: false, apiKey: '' },
+            usageLimit: data.usage_limit,
+            usageCount: data.usage_count,
+            primaryColor: data.primary_color,
+            logoUrl: data.logo_url
+        };
+    } catch (e) {
+        console.error("Get company by slug exception:", e);
         return null;
     }
   },
@@ -279,10 +360,15 @@ export const dbService = {
         return memCompanies.map(c => ({
             id: c.id,
             name: c.name,
+            slug: c.slug,
             username: c.username,
             password: c.password,
             adminEmail: c.admin_email,
-            crmConfig: c.crm_config
+            crmConfig: c.crm_config,
+            usageLimit: c.usage_limit,
+            usageCount: c.usage_count,
+            primaryColor: c.primary_color,
+            logoUrl: c.logo_url
         }));
     }
 
@@ -292,10 +378,15 @@ export const dbService = {
       return data.map(c => ({
         id: c.id,
         name: c.name,
+        slug: c.slug,
         username: c.username,
         password: c.password,
         adminEmail: c.admin_email,
-        crmConfig: c.crm_config || { provider: null, isConnected: false, apiKey: '' }
+        crmConfig: c.crm_config || { provider: null, isConnected: false, apiKey: '' },
+        usageLimit: c.usage_limit,
+        usageCount: c.usage_count,
+        primaryColor: c.primary_color,
+        logoUrl: c.logo_url
       }));
     } catch (e) {
       return [];
@@ -307,10 +398,14 @@ export const dbService = {
         const newComp = {
             id: crypto.randomUUID(),
             name: company.name,
+            slug: company.slug,
             username: company.username,
             password: company.password,
             admin_email: company.adminEmail,
-            crm_config: company.crmConfig
+            crm_config: company.crmConfig,
+            usage_limit: company.usageLimit,
+            usage_count: 0,
+            primary_color: company.primaryColor
         };
         memCompanies.push(newComp);
         return newComp;
@@ -318,11 +413,15 @@ export const dbService = {
 
     try {
         const { data, error } = await supabase.from('companies').insert({
-        name: company.name,
-        username: company.username,
-        password: company.password,
-        admin_email: company.adminEmail,
-        crm_config: company.crmConfig
+          name: company.name,
+          slug: company.slug,
+          username: company.username,
+          password: company.password,
+          admin_email: company.adminEmail,
+          crm_config: company.crmConfig,
+          usage_limit: company.usageLimit,
+          usage_count: 0,
+          primary_color: company.primaryColor
         }).select().single();
         
         if (error) throw error;
@@ -341,36 +440,44 @@ export const dbService = {
     if (error) throw error;
   },
 
-  async updateCompanySettings(id: string, email: string, crmConfig: any) {
-    console.log("Saving settings for company:", id);
+  async updateCompanySettings(id: string, updates: Partial<CompanyProfile>) {
     if (isOfflineMode) {
         const idx = memCompanies.findIndex(c => c.id === id);
         if (idx >= 0) {
-            memCompanies[idx].admin_email = email;
-            memCompanies[idx].crm_config = crmConfig;
+            if (updates.adminEmail) memCompanies[idx].admin_email = updates.adminEmail;
+            if (updates.crmConfig) memCompanies[idx].crm_config = updates.crmConfig;
+            if (updates.primaryColor) memCompanies[idx].primary_color = updates.primaryColor;
+            if (updates.logoUrl) memCompanies[idx].logo_url = updates.logoUrl;
         }
         return;
     }
 
-    // Include .select() to ensure we get confirmation that a row was actually found and updated
-    const { data, error } = await supabase.from('companies').update({
-        admin_email: email,
-        crm_config: crmConfig
-    })
-    .eq('id', id)
-    .select();
+    const dbUpdates: any = {};
+    if (updates.adminEmail) dbUpdates.admin_email = updates.adminEmail;
+    if (updates.crmConfig) dbUpdates.crm_config = updates.crmConfig;
+    if (updates.primaryColor) dbUpdates.primary_color = updates.primaryColor;
+    if (updates.logoUrl) dbUpdates.logo_url = updates.logoUrl;
 
-    if (error) {
-        console.error("DB Update Error:", error);
-        throw error;
-    }
+    const { error } = await supabase.from('companies').update(dbUpdates).eq('id', id);
 
-    if (!data || data.length === 0) {
-        console.error("No company found with ID:", id);
-        throw new Error("Failed to update: Company not found");
-    }
+    if (error) throw error;
+  },
 
-    console.log("Settings updated successfully for:", data[0].name);
+  // Used by SuperAdmin to update usage limit
+  async updateCompanyLimit(id: string, usageLimit: number | null) {
+      if (isOfflineMode) {
+          const idx = memCompanies.findIndex(c => c.id === id);
+          if (idx >= 0) {
+              memCompanies[idx].usage_limit = usageLimit;
+          }
+          return;
+      }
+      
+      const { error } = await supabase.from('companies').update({
+          usage_limit: usageLimit
+      }).eq('id', id);
+      
+      if (error) throw error;
   },
 
   // STORAGE

@@ -1,4 +1,5 @@
 
+
 export interface InventoryItem {
   id: string;
   name: string;
@@ -56,16 +57,16 @@ export interface JobRecord {
 
 export interface CompanyProfile {
   id: string;
-  name: string;
-  slug?: string;                     // <-- add this line
-  adminEmail?: string | null;
-  crmConfig?: {
-    provider: string | null;
-    isConnected: boolean;
-    apiKey?: string;
-  } | null;
-  username?: string | null;
-  password?: string | null;
+  name: string; // Display name e.g., "Dan the Moving Man"
+  slug?: string; // public URL slug e.g., "dan-the-moving-man"
+  username?: string; // Legacy/Offline: Login username
+  password?: string; // Legacy/Offline: Login password
+  adminEmail: string;
+  crmConfig: CRMConfig;
+  usageLimit?: number | null; // Max number of uses (jobs/scans)
+  usageCount?: number; // Current count
+  primaryColor?: string; // Brand color
+  logoUrl?: string;      // Brand logo
 }
 
 export interface UserProfile {
@@ -80,6 +81,8 @@ export interface AppSettings {
   companyName: string;
   adminEmail: string;
   crmConfig: CRMConfig;
+  primaryColor?: string;
+  logoUrl?: string;
 }
 
 export type UserRole = 'GUEST' | 'COMPANY_ADMIN' | 'SUPER_ADMIN';

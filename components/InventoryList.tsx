@@ -141,19 +141,8 @@ const InventoryList: React.FC<InventoryListProps> = ({
                   </button>
               </div>
             </div>
-
-            <div className={`grid grid-cols-2 gap-4 mt-3 pt-3 border-t border-dashed border-slate-100 dark:border-slate-800`}>
-               {/* Stats */}
-               <div className="space-y-1">
-                  <div className="text-xs text-slate-500 dark:text-slate-400">Volume (unit)</div>
-                  <div className="text-sm font-medium text-slate-700 dark:text-slate-200">{item.volumeCuFt} cf</div>
-               </div>
-               <div className="space-y-1">
-                  <div className="text-xs text-slate-500 dark:text-slate-400">Weight (unit)</div>
-                  <div className="text-sm font-medium text-slate-700 dark:text-slate-200">{item.weightLbs} lbs</div>
-               </div>
-            </div>
             
+            {/* Quantity Controls - Visual stats removed per request */}
             <div className="mt-4 flex items-center justify-between">
                 <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-lg p-1">
                     <button 
@@ -171,12 +160,6 @@ const InventoryList: React.FC<InventoryListProps> = ({
                     >
                         +
                     </button>
-                </div>
-                <div className="text-right">
-                    <div className="text-xs text-slate-400 dark:text-slate-500">Total</div>
-                    <div className="text-sm font-bold text-slate-800 dark:text-slate-200">
-                        {Math.round(item.volumeCuFt * item.quantity)} cf
-                    </div>
                 </div>
             </div>
           </div>

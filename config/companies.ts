@@ -1,6 +1,6 @@
 
 export type PublicCompanyConfig = {
-  slug: string;            // used in URL, e.g. /c/danmoving
+  slug: string;            // used in URL, e.g. /danmoving
   name: string;            // display name
   destinationEmail: string; // where inventories will be sent
   logoUrl?: string;

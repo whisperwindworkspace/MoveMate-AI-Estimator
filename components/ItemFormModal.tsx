@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { InventoryItem } from '../types';
 import { CATEGORIES, ITEM_TAGS, STANDARD_MOVING_ITEMS } from '../constants';
-import { X, Upload, Image as ImageIcon, Sparkles, Loader2, Check } from 'lucide-react';
+import { X, Upload, Image as ImageIcon, Loader2 } from 'lucide-react';
 import { estimateItemStats } from '../services/geminiService';
 
 interface ItemFormModalProps {
@@ -79,22 +79,28 @@ const ItemFormModal: React.FC<ItemFormModalProps> = ({ isOpen, onClose, onSave, 
     }
   };
 
-  const handleAutoEstimate = async () => {
-    if (!formData.name) return;
-    setIsEstimating(true);
-    const stats = await estimateItemStats(formData.name, formData.category || 'Misc');
-    setFormData(prev => ({
-        ...prev,
-        volumeCuFt: stats.volumeCuFt,
-        weightLbs: stats.weightLbs
-    }));
-    setIsEstimating(false);
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name) return;
-    onSave(formData);
+
+    let finalData = { ...formData };
+
+    // Auto-calculate stats if missing or if name changed (we assume name change implies new stats needed if manually entered)
+    // Since fields are hidden, we force a recalculation on save to ensure accuracy for the backend/email.
+    setIsEstimating(true);
+    try {
+        // Optimization: Only estimate if we don't have data or if it looks like a default 0
+        // But since user can't edit, we should trust the estimate over the potentially stale initialData if they changed the name.
+        const stats = await estimateItemStats(finalData.name, finalData.category || 'Misc');
+        finalData.volumeCuFt = stats.volumeCuFt;
+        finalData.weightLbs = stats.weightLbs;
+    } catch (e) {
+        console.warn("Failed to auto-estimate stats on save", e);
+    } finally {
+        setIsEstimating(false);
+    }
+
+    onSave(finalData);
     onClose();
   };
 
@@ -136,7 +142,7 @@ const ItemFormModal: React.FC<ItemFormModalProps> = ({ isOpen, onClose, onSave, 
             {/* Name */}
             <div>
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Item Name</label>
-              <div className="flex gap-2">
+              <div className="flex gap-2 relative">
                 <input
                     list="standard-items"
                     name="name"
@@ -145,16 +151,13 @@ const ItemFormModal: React.FC<ItemFormModalProps> = ({ isOpen, onClose, onSave, 
                     placeholder="e.g. Sofa, Medium Box"
                     className="flex-1 p-2.5 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-slate-900 dark:text-white placeholder-slate-400"
                     required
+                    autoFocus
                 />
-                <button 
-                    type="button"
-                    onClick={handleAutoEstimate}
-                    disabled={!formData.name || isEstimating}
-                    className="px-3 py-2 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg border border-indigo-100 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 disabled:opacity-50"
-                    title="Auto-estimate volume & weight with AI"
-                >
-                    {isEstimating ? <Loader2 className="animate-spin" size={20}/> : <Sparkles size={20}/>}
-                </button>
+                {isEstimating && (
+                    <div className="absolute right-3 top-2.5 text-blue-500">
+                        <Loader2 className="animate-spin" size={20}/>
+                    </div>
+                )}
               </div>
               <datalist id="standard-items">
                 {STANDARD_MOVING_ITEMS.map(item => <option key={item} value={item} />)}
@@ -182,41 +185,17 @@ const ItemFormModal: React.FC<ItemFormModalProps> = ({ isOpen, onClose, onSave, 
               </div>
             </div>
 
-            {/* Stats */}
-            <div className="grid grid-cols-3 gap-4">
-               <div>
-                  <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Quantity</label>
-                  <input
-                    type="number"
-                    name="quantity"
-                    min="1"
-                    value={formData.quantity}
-                    onChange={handleChange}
-                    className="w-full p-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg"
-                  />
-               </div>
-               <div>
-                  <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Vol (cf)</label>
-                  <input
-                    type="number"
-                    name="volumeCuFt"
-                    step="0.1"
-                    value={formData.volumeCuFt}
-                    onChange={handleChange}
-                    className="w-full p-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-                  />
-               </div>
-               <div>
-                  <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Weight (lbs)</label>
-                  <input
-                    type="number"
-                    name="weightLbs"
-                    step="0.1"
-                    value={formData.weightLbs}
-                    onChange={handleChange}
-                    className="w-full p-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-                  />
-               </div>
+            {/* Quantity Only - Vol/Weight hidden per requirement */}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Quantity</label>
+              <input
+                type="number"
+                name="quantity"
+                min="1"
+                value={formData.quantity}
+                onChange={handleChange}
+                className="w-full p-2.5 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+              />
             </div>
 
             {/* Tags */}
@@ -252,9 +231,10 @@ const ItemFormModal: React.FC<ItemFormModalProps> = ({ isOpen, onClose, onSave, 
           <button
             type="submit"
             form="item-form"
-            className="flex-1 py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow-lg shadow-blue-200 dark:shadow-blue-900/30 transition"
+            disabled={isEstimating}
+            className="flex-1 py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow-lg shadow-blue-200 dark:shadow-blue-900/30 transition flex justify-center items-center gap-2 disabled:opacity-70"
           >
-            Save Item
+            {isEstimating ? <><Loader2 className="animate-spin" size={18}/> Calculatiing...</> : 'Save Item'}
           </button>
         </div>
       </div>
@@ -263,3 +243,4 @@ const ItemFormModal: React.FC<ItemFormModalProps> = ({ isOpen, onClose, onSave, 
 };
 
 export default ItemFormModal;
+    

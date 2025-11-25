@@ -1,4 +1,5 @@
 
+
 import React, { useState } from 'react';
 import { Database, Copy, CheckCircle, RefreshCw, X } from 'lucide-react';
 
@@ -13,6 +14,11 @@ const SQL_SCRIPT = `
 -- If your settings aren't saving, it's because these columns are missing.
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS admin_email text;
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS crm_config jsonb;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS usage_limit integer DEFAULT NULL;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS usage_count integer DEFAULT 0;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS slug text;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS primary_color text DEFAULT '#2563eb';
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url text;
 
 -- ==========================================
 -- 2. CREATE TABLES (If they don't exist)
@@ -25,10 +31,15 @@ insert into storage.buckets (id, name, public) values ('images', 'images', true)
 create table if not exists companies (
   id uuid primary key default gen_random_uuid(),
   name text,
+  slug text unique,
   admin_email text,
   crm_config jsonb,
   username text, -- legacy
-  password text  -- legacy
+  password text,  -- legacy
+  usage_limit integer,
+  usage_count integer default 0,
+  primary_color text default '#2563eb',
+  logo_url text
 );
 
 -- Users Profile Table (Links Auth to Company)
@@ -88,8 +99,8 @@ create policy "Public Access Jobs" on jobs for all using (true) with check (true
 -- ==========================================
 -- 4. SEED DATA
 -- ==========================================
-INSERT INTO companies (name, admin_email, crm_config)
-VALUES ('Super Admin', 'admin@movemate.ai', '{"provider": null, "isConnected": false}')
+INSERT INTO companies (name, slug, admin_email, crm_config)
+VALUES ('Super Admin', 'super-admin', 'admin@movemate.ai', '{"provider": null, "isConnected": false}')
 ON CONFLICT DO NOTHING;
 `;
 
