@@ -44,10 +44,29 @@ const InventoryList: React.FC<InventoryListProps> = ({
 
   const getTagColor = (tag: string) => {
       const t = tag.toLowerCase();
-      if (t === 'fragile') return 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800';
-      if (t === 'heavy') return 'bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800';
-      if (t === 'valuable') return 'bg-purple-100 text-purple-700 border-purple-200 dark:bg-purple-900/30 dark:text-purple-300 dark:border-purple-800';
-      return 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700';
+      
+      // High Priority / Caution (Red)
+      if (t.includes('fragile') || t.includes('glass') || t.includes('break')) {
+          return 'bg-red-50 text-red-700 border-red-200 ring-red-500/10 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800';
+      }
+      
+      // Warning / Physical (Amber/Orange)
+      if (t.includes('heavy') || t.includes('hazardous') || t.includes('large')) {
+          return 'bg-amber-50 text-amber-700 border-amber-200 ring-amber-500/10 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-800';
+      }
+      
+      // Value / Special (Purple)
+      if (t.includes('valuable') || t.includes('antique') || t.includes('electronic')) {
+          return 'bg-purple-50 text-purple-700 border-purple-200 ring-purple-500/10 dark:bg-purple-900/20 dark:text-purple-300 dark:border-purple-800';
+      }
+
+      // Structural / Logistics (Blue)
+      if (t.includes('stackable') || t.includes('disassemble')) {
+          return 'bg-blue-50 text-blue-700 border-blue-200 ring-blue-500/10 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800';
+      }
+
+      // Default (Slate)
+      return 'bg-slate-100 text-slate-600 border-slate-200 ring-slate-500/10 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700';
   };
 
   return (
@@ -113,12 +132,12 @@ const InventoryList: React.FC<InventoryListProps> = ({
                             </span>
                         )}
                     </h4>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                        <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">
+                    <div className="flex flex-wrap gap-2 mt-2">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider text-slate-500 bg-slate-100 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
                             {item.category || 'Misc'}
                         </span>
                         {item.tags && item.tags.map(tag => (
-                            <span key={tag} className={`text-[10px] px-1.5 py-0.5 rounded border ${getTagColor(tag)}`}>
+                            <span key={tag} className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border ring-1 ring-inset ${getTagColor(tag)}`}>
                                 {tag}
                             </span>
                         ))}
@@ -142,7 +161,7 @@ const InventoryList: React.FC<InventoryListProps> = ({
               </div>
             </div>
             
-            {/* Quantity Controls - Visual stats removed per request */}
+            {/* Quantity Controls */}
             <div className="mt-4 flex items-center justify-between">
                 <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-lg p-1">
                     <button 

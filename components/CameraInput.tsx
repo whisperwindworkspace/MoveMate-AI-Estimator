@@ -1,14 +1,91 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Camera, Upload, ScanLine, X, Loader2, ImagePlus, Zap, ZapOff } from 'lucide-react';
+import { Camera, Upload, ScanLine, X, Loader2, ImagePlus, Zap, ZapOff, Video, Circle, StopCircle } from 'lucide-react';
+import LoadingOverlay from './LoadingOverlay';
 
 interface CameraInputProps {
   onImageCaptured: (base64: string) => void;
+  onVideoCaptured?: (frames: string[]) => void;
   isAnalyzing: boolean;
+  extraAction?: React.ReactNode;
 }
 
-const CameraInput: React.FC<CameraInputProps> = ({ onImageCaptured, isAnalyzing }) => {
+// Helper to extract frames from video file
+const extractFramesFromVideo = (file: File): Promise<string[]> => {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    
+    const objectUrl = URL.createObjectURL(file);
+    video.src = objectUrl;
+
+    const frames: string[] = [];
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    video.onloadedmetadata = () => {
+      const duration = video.duration;
+      // Limit resolution for analysis
+      const maxDim = 1920;
+      let width = video.videoWidth;
+      let height = video.videoHeight;
+      
+      if (width > maxDim || height > maxDim) {
+          const scale = Math.min(maxDim/width, maxDim/height);
+          width *= scale;
+          height *= scale;
+      }
+      
+      canvas.width = width;
+      canvas.height = height;
+
+      let currentTime = 0.5; // Start slightly in
+      const interval = 1.0; // Every 1 second
+      const maxFrames = 10;
+
+      const capture = () => {
+        if (currentTime >= duration || frames.length >= maxFrames) {
+          URL.revokeObjectURL(objectUrl);
+          resolve(frames);
+          return;
+        }
+        
+        video.currentTime = currentTime;
+      };
+
+      video.onseeked = () => {
+        if (ctx) {
+            ctx.drawImage(video, 0, 0, width, height);
+            const data = canvas.toDataURL('image/jpeg', 0.7);
+            frames.push(data.split(',')[1]);
+        }
+        currentTime += interval;
+        capture();
+      };
+      
+      video.onerror = () => {
+          URL.revokeObjectURL(objectUrl);
+          reject(new Error("Video processing error"));
+      };
+
+      capture(); // Start
+    };
+    
+    video.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("Failed to load video"));
+    };
+  });
+};
+
+const CameraInput: React.FC<CameraInputProps> = ({ onImageCaptured, onVideoCaptured, isAnalyzing, extraAction }) => {
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [mode, setMode] = useState<'PHOTO' | 'VIDEO'>('PHOTO');
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [hasTorch, setHasTorch] = useState(false);
   const [isTorchOn, setIsTorchOn] = useState(false);
@@ -16,11 +93,18 @@ const CameraInput: React.FC<CameraInputProps> = ({ onImageCaptured, isAnalyzing 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Refs for video capture logic
+  const framesRef = useRef<string[]>([]);
+  // Use 'any' to avoid NodeJS namespace issues in browser environments
+  const intervalRef = useRef<any>(null);
+  const timerRef = useRef<any>(null);
 
-  // Stop stream when component unmounts
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       stopStreamTracks();
+      stopRecording();
     };
   }, [stream]);
 
@@ -34,7 +118,11 @@ const CameraInput: React.FC<CameraInputProps> = ({ onImageCaptured, isAnalyzing 
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: { 
-            facingMode: 'environment' 
+            facingMode: 'environment',
+            width: { ideal: 3840 }, // Request 4K for better detection details
+            height: { ideal: 2160 },
+            // @ts-ignore - focusMode is supported by some browsers but not in standard typings
+            advanced: [{ focusMode: 'continuous' }] 
         }
       });
       
@@ -48,7 +136,6 @@ const CameraInput: React.FC<CameraInputProps> = ({ onImageCaptured, isAnalyzing 
           setHasTorch(true);
       }
 
-      // Slight delay to allow render
       setTimeout(() => {
         if (videoRef.current) {
           videoRef.current.srcObject = mediaStream;
@@ -61,10 +148,12 @@ const CameraInput: React.FC<CameraInputProps> = ({ onImageCaptured, isAnalyzing 
   };
 
   const stopCamera = () => {
+    stopRecording();
     stopStreamTracks();
     setStream(null);
     setIsCameraOpen(false);
     setIsTorchOn(false);
+    setRecordingTime(0);
   };
 
   const toggleTorch = async () => {
@@ -82,53 +171,140 @@ const CameraInput: React.FC<CameraInputProps> = ({ onImageCaptured, isAnalyzing 
       }
   };
 
-  const captureFrame = () => {
+  // --- Capture Logic ---
+
+  const captureFrameBase64 = (quality = 0.85, scale = 1.0): string | null => {
     if (videoRef.current && canvasRef.current) {
       const video = videoRef.current;
       const canvas = canvasRef.current;
       
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      const width = video.videoWidth * scale; 
+      const height = video.videoHeight * scale;
+
+      canvas.width = width;
+      canvas.height = height;
       
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-        const base64 = dataUrl.split(',')[1];
-        onImageCaptured(base64);
+        ctx.drawImage(video, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality); 
+        return dataUrl.split(',')[1];
       }
     }
+    return null;
   };
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const result = reader.result as string;
-        const base64 = result.split(',')[1];
-        onImageCaptured(base64);
+  const handleTakePhoto = () => {
+      // High quality capture for single photo mode (4K source if available)
+      const base64 = captureFrameBase64(0.85, 1.0);
+      if (base64) onImageCaptured(base64);
+  };
+
+  const startRecording = () => {
+      setIsRecording(true);
+      setRecordingTime(0);
+      framesRef.current = [];
+
+      // Capture frames for video sequence.
+      // Since source is now 4K, we scale down by 0.5 (to ~1080p) to keep payload size reasonable for multiple frames.
+      const captureVideoFrame = () => {
+          const frame = captureFrameBase64(0.7, 0.5);
+          if (frame) framesRef.current.push(frame);
       };
-      reader.readAsDataURL(file);
+
+      captureVideoFrame(); // First frame
+
+      // Capture frame every 1 second
+      intervalRef.current = setInterval(captureVideoFrame, 1000);
+
+      // Timer for UI
+      timerRef.current = setInterval(() => {
+          setRecordingTime(prev => prev + 1);
+      }, 1000);
+  };
+
+  const stopRecording = () => {
+      if (!isRecording) return;
+      
+      setIsRecording(false);
+      if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+      }
+      if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+      }
+
+      if (onVideoCaptured && framesRef.current.length > 0) {
+          // Limit to max 10 frames to prevent payload explosion
+          const limitedFrames = framesRef.current.slice(0, 10);
+          onVideoCaptured(limitedFrames);
+      }
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    // Explicitly cast to File[] to avoid 'unknown' type issues with Array.from in some configs
+    const fileList: File[] = Array.from(files);
+    
+    // Process Images
+    const images = fileList.filter(f => f.type.startsWith('image/'));
+    images.forEach(file => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            const result = reader.result as string;
+            const base64 = result.split(',')[1];
+            onImageCaptured(base64);
+        };
+        reader.readAsDataURL(file);
+    });
+
+    // Process Videos
+    const videos = fileList.filter(f => f.type.startsWith('video/'));
+    if (onVideoCaptured && videos.length > 0) {
+        for (const video of videos) {
+            try {
+                const frames = await extractFramesFromVideo(video);
+                if (frames.length > 0) {
+                    onVideoCaptured(frames);
+                }
+            } catch (e) {
+                console.error("Failed to process uploaded video", e);
+                alert("Could not process video file: " + video.name);
+            }
+        }
     }
+
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  const formatTime = (seconds: number) => {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
   return (
-    <div className="w-full mb-6 relative">
+    <div className="w-full mb-6 relative group">
+      {/* Global Loading Overlay for Camera Input Component (Covers Camera, Buttons, Voice, Upload) */}
+      {isAnalyzing && <LoadingOverlay />}
+
       <input
         type="file"
-        accept="image/*"
+        accept="image/*,video/*"
+        multiple
         className="hidden"
         ref={fileInputRef}
         onChange={handleFileUpload}
       />
       
-      {/* Hidden canvas for processing */}
       <canvas ref={canvasRef} className="hidden" />
 
       {isCameraOpen ? (
-        <div className="relative rounded-2xl overflow-hidden bg-black shadow-lg aspect-[4/3] md:aspect-video border border-slate-800">
+        <div className="relative rounded-2xl overflow-hidden bg-black shadow-lg aspect-[3/4] sm:aspect-[4/3] md:aspect-video border border-slate-800">
            <video 
               ref={videoRef} 
               autoPlay 
@@ -137,92 +313,124 @@ const CameraInput: React.FC<CameraInputProps> = ({ onImageCaptured, isAnalyzing 
               className="w-full h-full object-cover"
            />
            
-           {/* Overlay Controls */}
-           <div className="absolute inset-0 bg-transparent flex flex-col justify-between p-4">
-              <div className="flex justify-between items-start">
+           {/* Top Controls */}
+           <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-start bg-gradient-to-b from-black/60 to-transparent">
                 {hasTorch ? (
                     <button
                         onClick={toggleTorch}
-                        className={`p-3 rounded-full backdrop-blur-sm transition-all ${
+                        className={`p-2 rounded-full backdrop-blur-md transition-all ${
                             isTorchOn 
-                            ? 'bg-yellow-400/80 text-black shadow-[0_0_15px_rgba(250,204,21,0.5)]' 
-                            : 'bg-black/40 text-white hover:bg-black/60'
+                            ? 'bg-yellow-400 text-black' 
+                            : 'bg-black/30 text-white'
                         }`}
                     >
                         {isTorchOn ? <Zap size={20} fill="currentColor" /> : <ZapOff size={20} />}
                     </button>
                 ) : <div />}
 
+                {isRecording && (
+                    <div className="bg-red-600 text-white px-3 py-1 rounded-full text-xs font-mono animate-pulse flex items-center gap-2">
+                        <div className="w-2 h-2 bg-white rounded-full"></div>
+                        REC {formatTime(recordingTime)}
+                    </div>
+                )}
+
                 <button 
                    onClick={stopCamera}
-                   className="bg-black/50 text-white p-2 rounded-full backdrop-blur-sm hover:bg-black/70"
+                   className="bg-black/30 text-white p-2 rounded-full backdrop-blur-md hover:bg-black/50"
                 >
                    <X size={20} />
                 </button>
-              </div>
-
-              <div className="flex justify-center mb-4">
-                 <button
-                    onClick={captureFrame}
-                    disabled={isAnalyzing}
-                    className="group relative flex items-center gap-2 bg-white dark:bg-slate-100 text-blue-600 px-6 py-3 rounded-full font-bold shadow-xl transition-all active:scale-95 disabled:opacity-75 disabled:cursor-wait"
-                 >
-                    {isAnalyzing ? (
-                        <>
-                           <Loader2 className="animate-spin" size={24} /> Analyzing...
-                        </>
-                    ) : (
-                        <>
-                           <div className="p-1 border-2 border-blue-600 rounded-full">
-                             <div className="w-4 h-4 bg-blue-600 rounded-full animate-pulse" />
-                           </div>
-                           Scan Visible Items
-                        </>
-                    )}
-                 </button>
-              </div>
            </div>
-           
-           {/* Scanning Grid Overlay Effect */}
-           <div className="absolute inset-0 pointer-events-none opacity-20 bg-[linear-gradient(rgba(0,150,255,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(0,150,255,0.1)_1px,transparent_1px)] bg-[size:40px_40px]"></div>
-           {!isAnalyzing && <div className="absolute inset-x-0 top-1/2 h-0.5 bg-blue-400/50 shadow-[0_0_15px_rgba(59,130,246,0.8)] animate-[scan_2s_ease-in-out_infinite]" />}
+
+           {/* Bottom Controls */}
+           <div className="absolute bottom-0 left-0 right-0 p-6 flex flex-col items-center gap-6 bg-gradient-to-t from-black/80 via-black/40 to-transparent">
+              
+              {/* Mode Toggle */}
+              {!isRecording && !isAnalyzing && (
+                  <div className="flex bg-black/40 backdrop-blur-md rounded-full p-1">
+                      <button 
+                        onClick={() => setMode('PHOTO')}
+                        className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${mode === 'PHOTO' ? 'bg-white text-black' : 'text-white hover:bg-white/10'}`}
+                      >
+                          Photo
+                      </button>
+                      <button 
+                        onClick={() => setMode('VIDEO')}
+                        className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${mode === 'VIDEO' ? 'bg-white text-black' : 'text-white hover:bg-white/10'}`}
+                      >
+                          Video
+                      </button>
+                  </div>
+              )}
+
+              {/* Shutter Button */}
+              <div className="flex items-center justify-center">
+                 {mode === 'PHOTO' ? (
+                     <button
+                        onClick={handleTakePhoto}
+                        disabled={isAnalyzing}
+                        className="w-16 h-16 rounded-full border-4 border-white flex items-center justify-center bg-white/20 active:scale-90 transition-all shadow-lg disabled:opacity-0"
+                     >
+                        <div className="w-12 h-12 bg-white rounded-full"></div>
+                     </button>
+                 ) : (
+                     // Video Mode Button
+                     <button
+                        onClick={isRecording ? stopRecording : startRecording}
+                        disabled={isAnalyzing}
+                        className={`w-16 h-16 rounded-full border-4 flex items-center justify-center transition-all shadow-lg active:scale-95 disabled:opacity-0 ${
+                            isRecording ? 'border-red-500 bg-red-500/20' : 'border-white bg-white/20'
+                        }`}
+                     >
+                        {isRecording ? (
+                            <div className="w-8 h-8 bg-red-500 rounded-md"></div>
+                        ) : (
+                            <div className="w-14 h-14 bg-red-500 rounded-full border-2 border-transparent"></div>
+                        )}
+                     </button>
+                 )}
+              </div>
+              
+              {!isRecording && !isAnalyzing && (
+                  <p className="text-white/70 text-xs text-center max-w-[200px]">
+                      {mode === 'PHOTO' 
+                        ? "Tap to capture a single high-res photo." 
+                        : "Record a short clip to scan the room."}
+                  </p>
+              )}
+           </div>
         </div>
       ) : (
-        /* Default State - Scan Button */
-        <div className="flex gap-3">
+        /* Default State */
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <button
                 onClick={startCamera}
                 disabled={isAnalyzing}
-                className="flex-1 flex flex-col items-center justify-center p-6 bg-blue-600 text-white rounded-2xl shadow-lg shadow-blue-200 dark:shadow-blue-900/20 hover:bg-blue-700 transition-all active:scale-95"
+                className="col-span-2 md:col-span-1 flex flex-col items-center justify-center p-6 bg-blue-600 text-white rounded-2xl shadow-lg shadow-blue-200 dark:shadow-blue-900/20 hover:bg-blue-700 transition-all active:scale-95"
             >
                 <div className="p-3 bg-white/20 rounded-full mb-2">
                     <ScanLine size={28} />
                 </div>
                 <span className="font-bold">Open Scanner</span>
-                <span className="text-xs text-blue-100 opacity-80 mt-1">Use Camera</span>
+                <span className="text-xs text-blue-100 opacity-80 mt-1">Camera</span>
             </button>
+
+            {extraAction}
 
             <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isAnalyzing}
-                className="flex-[0.4] flex flex-col items-center justify-center p-6 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 rounded-2xl shadow-sm hover:bg-slate-50 dark:hover:bg-slate-750 transition-all"
+                className="flex flex-col items-center justify-center p-6 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 rounded-2xl shadow-sm hover:bg-slate-50 dark:hover:bg-slate-750 transition-all"
             >
                 <div className="p-3 bg-slate-100 dark:bg-slate-700 rounded-full mb-2">
                     <ImagePlus size={28} />
                 </div>
                 <span className="font-bold text-sm">Upload</span>
-                <span className="text-xs text-slate-400 dark:text-slate-500 mt-1">Photos</span>
+                <span className="text-xs text-slate-400 dark:text-slate-500 mt-1">Photos / Video</span>
             </button>
         </div>
       )}
-
-      <style>{`
-        @keyframes scan {
-          0%, 100% { transform: translateY(-100px); opacity: 0; }
-          50% { opacity: 1; }
-          100% { transform: translateY(100px); opacity: 0; }
-        }
-      `}</style>
     </div>
   );
 };

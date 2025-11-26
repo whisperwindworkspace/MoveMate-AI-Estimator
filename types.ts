@@ -39,6 +39,7 @@ export interface JobDetails {
   jobId?: string;
   customerName?: string;
   moveDate?: string;
+  companyName?: string;
   packingReqs?: PackingRequirements;
 }
 

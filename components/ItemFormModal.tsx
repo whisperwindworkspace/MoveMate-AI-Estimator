@@ -1,9 +1,10 @@
 
 import React, { useState, useEffect } from 'react';
 import { InventoryItem } from '../types';
-import { CATEGORIES, ITEM_TAGS, STANDARD_MOVING_ITEMS } from '../constants';
-import { X, Upload, Image as ImageIcon, Loader2 } from 'lucide-react';
+import { CATEGORIES, ITEM_TAGS, STANDARD_MOVING_ITEMS, FORBIDDEN_KEYWORDS } from '../constants';
+import { X, Upload, Image as ImageIcon, Loader2, AlertTriangle } from 'lucide-react';
 import { estimateItemStats } from '../services/geminiService';
+import LoadingOverlay from './LoadingOverlay';
 
 interface ItemFormModalProps {
   isOpen: boolean;
@@ -24,6 +25,7 @@ const ItemFormModal: React.FC<ItemFormModalProps> = ({ isOpen, onClose, onSave, 
   });
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [isEstimating, setIsEstimating] = useState(false);
+  const [warningMsg, setWarningMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -42,6 +44,7 @@ const ItemFormModal: React.FC<ItemFormModalProps> = ({ isOpen, onClose, onSave, 
         });
         setImagePreview(null);
       }
+      setWarningMsg(null);
     }
   }, [isOpen, initialData]);
 
@@ -53,6 +56,7 @@ const ItemFormModal: React.FC<ItemFormModalProps> = ({ isOpen, onClose, onSave, 
         ? parseFloat(value) || 0 
         : value
     }));
+    if (name === 'name') setWarningMsg(null);
   };
 
   const handleTagToggle = (tag: string) => {
@@ -83,14 +87,19 @@ const ItemFormModal: React.FC<ItemFormModalProps> = ({ isOpen, onClose, onSave, 
     e.preventDefault();
     if (!formData.name) return;
 
+    // Client-side validation for forbidden items
+    const nameLower = formData.name.toLowerCase();
+    for (const forbidden of FORBIDDEN_KEYWORDS) {
+        if (nameLower.includes(forbidden) && !nameLower.includes('box') && !nameLower.includes('tote')) {
+            setWarningMsg(`Please do not list small loose items like "${forbidden}". Pack them in a box and list "Box" instead.`);
+            return;
+        }
+    }
+
     let finalData = { ...formData };
 
-    // Auto-calculate stats if missing or if name changed (we assume name change implies new stats needed if manually entered)
-    // Since fields are hidden, we force a recalculation on save to ensure accuracy for the backend/email.
     setIsEstimating(true);
     try {
-        // Optimization: Only estimate if we don't have data or if it looks like a default 0
-        // But since user can't edit, we should trust the estimate over the potentially stale initialData if they changed the name.
         const stats = await estimateItemStats(finalData.name, finalData.category || 'Misc');
         finalData.volumeCuFt = stats.volumeCuFt;
         finalData.weightLbs = stats.weightLbs;
@@ -108,7 +117,10 @@ const ItemFormModal: React.FC<ItemFormModalProps> = ({ isOpen, onClose, onSave, 
   
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-slate-800 w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] border border-slate-100 dark:border-slate-700">
+      <div className="bg-white dark:bg-slate-800 w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] border border-slate-100 dark:border-slate-700 relative">
+        
+        {isEstimating && <LoadingOverlay />}
+
         <div className="flex justify-between items-center p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-850">
           <h3 className="text-lg font-bold text-slate-800 dark:text-white">
             {initialData ? 'Edit Item' : 'Add New Item'}
@@ -153,12 +165,13 @@ const ItemFormModal: React.FC<ItemFormModalProps> = ({ isOpen, onClose, onSave, 
                     required
                     autoFocus
                 />
-                {isEstimating && (
-                    <div className="absolute right-3 top-2.5 text-blue-500">
-                        <Loader2 className="animate-spin" size={20}/>
-                    </div>
-                )}
               </div>
+              {warningMsg && (
+                  <div className="mt-2 text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1 bg-amber-50 dark:bg-amber-900/20 p-2 rounded-lg">
+                      <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                      {warningMsg}
+                  </div>
+              )}
               <datalist id="standard-items">
                 {STANDARD_MOVING_ITEMS.map(item => <option key={item} value={item} />)}
               </datalist>
@@ -234,7 +247,7 @@ const ItemFormModal: React.FC<ItemFormModalProps> = ({ isOpen, onClose, onSave, 
             disabled={isEstimating}
             className="flex-1 py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow-lg shadow-blue-200 dark:shadow-blue-900/30 transition flex justify-center items-center gap-2 disabled:opacity-70"
           >
-            {isEstimating ? <><Loader2 className="animate-spin" size={18}/> Calculatiing...</> : 'Save Item'}
+            Save Item
           </button>
         </div>
       </div>
@@ -243,4 +256,3 @@ const ItemFormModal: React.FC<ItemFormModalProps> = ({ isOpen, onClose, onSave, 
 };
 
 export default ItemFormModal;
-    

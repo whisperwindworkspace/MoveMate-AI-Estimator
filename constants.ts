@@ -1,4 +1,3 @@
-
 import { InventoryItem, CompanyProfile } from "./types";
 
 export const CATEGORIES = [
@@ -17,6 +16,16 @@ export const ITEM_TAGS = [
   "Stackable",
   "Glass",
   "Hazardous"
+];
+
+export const FORBIDDEN_KEYWORDS = [
+    "book", "magazine", "paper", "file", "folder", "envelope", "dvd", "cd", "game case",
+    "cloth", "shirt", "pant", "shoe", "boot", "sneaker", "jacket", "coat", "hat", "glove", "sock", "underwear", "laundry", "towel", "linen", "pillow", "cushion", "blanket", "comforter",
+    "dish", "plate", "bowl", "cup", "glass", "mug", "utensil", "fork", "spoon", "knife", "cutlery", "pot", "pan", "skillet", "tray", "tupperware", "container", "bottle", "jar", "can", "food", "spice", "condiment",
+    "kettle", "waffle", "hair dryer", "curling iron", "hand blender",
+    "toiletry", "soap", "shampoo", "lotion", "brush", "makeup", "perfume", "medicine", "toothbrush", "toothpaste",
+    "remote", "controller", "cable", "charger", "cord", "mouse", "keyboard", "headphone", "earbud", "router", "modem",
+    "toy", "doll", "lego", "figurine", "vase", "picture frame", "photo", "candle", "plant", "flower", "waste basket", "trash can", "garbage", "bin"
 ];
 
 // Mapped exactly from user provided list (Cleaned Version)

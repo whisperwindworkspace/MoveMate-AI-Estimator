@@ -1,51 +1,50 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { InventoryItem } from "../types";
-import { CATEGORIES, ITEM_TAGS, REFERENCE_ITEM_DATA } from "../constants";
+import { CATEGORIES, ITEM_TAGS, REFERENCE_ITEM_DATA, FORBIDDEN_KEYWORDS } from "../constants";
+
+// --- HARD FILTER CONFIGURATION ---
+// FORBIDDEN_KEYWORDS imported from ../constants
 
 const SYSTEM_INSTRUCTION_IMAGE = `
-You are a master moving estimator with 20 years of experience. Your job is to create a moving inventory from images.
+You are an expert moving estimator. Identify **ALL** furniture, appliances, electronics, and distinct moveable items in the image.
 
-*** EXECUTION MODE: EXHAUSTIVE SCAN ***
-1.  Scan the image systematically: Left to Right, Background to Foreground.
-2.  Do not hallucinate items that are not there.
-3.  Do not miss significant items.
-4.  If multiple identical items exist (e.g., 4 Dining Chairs), count them precisely.
+*** ROBUST DETECTION RULES ***
+1. **BE COMPREHENSIVE**: If you see an item that looks like furniture or equipment, LIST IT. Do not be overly conservative.
+2. **PERSPECTIVE AWARENESS**: Items in the background or wide shots may appear small. Use context to identify them (e.g., a small rectangle near a bed is likely a "Nightstand", a shape under a desk is likely a "Chair").
+3. **PARTIAL VIEWS**: If you see part of a sofa, bed, or table, count it.
+4. **GROUPING**: If you see 4 chairs around a table, list {name: "Dining Chair", quantity: 4}.
 
-*** CRITICAL EXCLUSION RULES (DO NOT LIST THESE) ***
-1. **FIXTURES & STRUCTURAL ITEMS**: 
-   - IGNORE ALL items attached to the building.
-   - EXCLUDE: Kitchen cabinets, countertops, islands (fixed), bathroom vanities, sinks, toilets, bathtubs, showers, radiators, fireplaces, built-in wardrobes/shelves, ceiling fans, chandeliers, wall sconces, light switches, thermostats, windows, doors, blinds, curtain rods, wall-to-wall carpeting.
-   - INCLUDE ONLY: Movable furniture, free-standing appliances (fridge, washer, dryer), electronics, loose rugs, wall-mounted TVs (the TV itself), hung mirrors/art.
-2. **SMALL LOOSE ITEMS**: 
-   - IGNORE small clutter like books, clothes, dishes, pots, pans, toys, toiletries, remote controls, papers.
-   - Assume the customer will box these.
-   - ONLY list "Box, Medium" or "Plastic Tote" if you see actual pre-packed containers.
-
-*** ESTIMATION RULES ***
-1. **Match Standard Names**: Try to map items to these standard names if possible: ${Object.keys(REFERENCE_ITEM_DATA).slice(0, 50).join(', ')}... (and others).
-2. **Unknown/Custom Items**: If a significant movable item is detected but NOT in the standard list:
-   - YOU MUST ESTIMATE its Volume (cu ft) and Weight (lbs) based on visual dimensions and material.
-   - Do NOT return 0 for volume or weight.
-   - Use a descriptive name (e.g., "Custom Arcade Cabinet").
-3. **Context**: A bed typically implies a mattress and box spring (list as "Bed, [Size]"). A dining table implies chairs (count them and list "Chair, Dining" separately).
+*** FILTERING (Use Judgment) ***
+- **IGNORE**: Trash, loose papers, scattered clothes, and tiny clutter (pens, keys).
+- **INCLUDE**: Small but distinct items like "Table Lamp", "Toaster Oven", "Monitor", "Printer", "Stool", "Ottoman".
+- **FIXTURES**: Do not list built-in cabinets/counters, but DO list the appliances embedded in them (Stove, Dishwasher).
 
 *** OUTPUT FORMAT ***
-- Return a JSON Array of items.
-- Categories: ${CATEGORIES.join(', ')}
-- Tags: ${ITEM_TAGS.join(', ')}
+- JSON Array.
+- Use standard names where possible.
+`;
+
+const SYSTEM_INSTRUCTION_VIDEO = `
+You are analyzing a sequence of video frames from a moving inventory walkthrough.
+Your goal is to create a **single consolidated list** of all unique items found across these frames.
+
+*** VIDEO ANALYSIS RULES ***
+1. **DEDUPLICATION**: The frames are a sequence from the same room. If you see the same "Sofa" in Frame 1 and Frame 2, COUNT IT ONCE. Do not double count unless you clearly see two distinct items.
+2. **STITCHING**: Use multiple angles to identify items. If Frame 1 shows the back of a chair and Frame 2 shows the front, it is one "Chair".
+3. **COMPREHENSIVE SCAN**: Look at the background and corners.
+4. **IGNORE CLUTTER**: Ignore books, clothes, dishes, and small loose items. Focus on Furniture, Appliances, and Boxes.
+
+*** OUTPUT FORMAT ***
+- Return a JSON Array of unique items.
 `;
 
 const SYSTEM_INSTRUCTION_VOICE = `
-You are an intelligent assistant for a moving company app. 
-Convert the user's natural language voice command into a structured inventory list.
+You are a moving inventory assistant. Convert voice commands to a JSON list.
 
-Rules:
-1. Extract item names and quantities (e.g., "three large boxes" -> quantity: 3, name: "Box, Large").
-2. Ignore small loose items (e.g. "a pile of clothes") unless the user explicitly says "box of clothes".
-3. Try to map names to standard industry terms (e.g. "TV" -> "TV, Flat Screen").
-4. Categorize and tag each item accordingly.
-5. Return a JSON array of items.
+*** RULES ***
+1. **IGNORE SMALL ITEMS**: Filter out books, clothes, dishes, toys, etc., unless the user explicitly says "Box of [item]".
+2. **ONLY LIST**: Furniture, Large Appliances, Packed Boxes.
+3. **QUANTITIES**: Extract exact numbers.
 `;
 
 const RESPONSE_SCHEMA = {
@@ -57,7 +56,7 @@ const RESPONSE_SCHEMA = {
       quantity: { type: Type.NUMBER },
       volumeCuFt: { type: Type.NUMBER },
       weightLbs: { type: Type.NUMBER },
-      category: { type: Type.STRING, enum: CATEGORIES },
+      category: { type: Type.STRING }, 
       tags: { type: Type.ARRAY, items: { type: Type.STRING } },
       confidence: { type: Type.NUMBER }
     },
@@ -66,9 +65,7 @@ const RESPONSE_SCHEMA = {
 };
 
 // --- Lookup Helper ---
-// Tries to find the item in the Reference Data to get exact Volume/Weight
 const lookupReferenceStats = (name: string): { volumeCuFt: number, weightLbs: number, standardizedName?: string } | null => {
-    // 1. Exact match
     if (REFERENCE_ITEM_DATA[name]) {
         return { 
             volumeCuFt: REFERENCE_ITEM_DATA[name].volume, 
@@ -77,11 +74,9 @@ const lookupReferenceStats = (name: string): { volumeCuFt: number, weightLbs: nu
         };
     }
 
-    // 2. Case insensitive match
     const lowerName = name.toLowerCase().trim();
     const referenceKeys = Object.keys(REFERENCE_ITEM_DATA);
     
-    // Direct case-insensitive
     const exactKey = referenceKeys.find(k => k.toLowerCase() === lowerName);
     if (exactKey) {
         return {
@@ -91,10 +86,6 @@ const lookupReferenceStats = (name: string): { volumeCuFt: number, weightLbs: nu
         };
     }
 
-    // 3. Fuzzy / Partial Match (Simple token overlap)
-    // "King Size Bed" -> "Bed, King"
-    // "Flat Screen TV" -> "TV, Flat Screen"
-    // We look for the reference key that has the highest number of matching words
     let bestMatchKey = "";
     let maxOverlap = 0;
     const nameTokens = lowerName.replace(/[(),]/g, '').split(/\s+/);
@@ -108,14 +99,12 @@ const lookupReferenceStats = (name: string): { volumeCuFt: number, weightLbs: nu
             if (keyTokens.includes(token)) overlap++;
         });
 
-        // Heuristic: If we match 2 or more words, or if the name is short and matches 1 word perfectly
         if (overlap > maxOverlap) {
             maxOverlap = overlap;
             bestMatchKey = key;
         }
     }
 
-    // Threshold: Match at least 50% of the words or 2 words
     if (bestMatchKey && (maxOverlap >= 2 || (nameTokens.length === 1 && maxOverlap === 1))) {
          return {
             volumeCuFt: REFERENCE_ITEM_DATA[bestMatchKey].volume, 
@@ -127,25 +116,44 @@ const lookupReferenceStats = (name: string): { volumeCuFt: number, weightLbs: nu
     return null;
 };
 
+// --- Code Filter Helper ---
+const postProcessFilter = (items: any[]): any[] => {
+    return items.filter(item => {
+        const name = item.name.toLowerCase();
+        
+        // 1. Allow explicit Boxes/Totes
+        if (name.includes('box') || name.includes('tote') || name.includes('bin') || name.includes('crate')) {
+            return true;
+        }
+
+        // 2. Check against Forbidden Keywords
+        for (const forbidden of FORBIDDEN_KEYWORDS) {
+            if (name === forbidden || name === `${forbidden}s` || name.includes(` ${forbidden} `) || name.endsWith(` ${forbidden}`) || name.startsWith(`${forbidden} `)) {
+                 return false;
+            }
+        }
+        return true;
+    });
+};
+
 
 export const analyzeImageForInventory = async (base64Data: string): Promise<InventoryItem[]> => {
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3-pro-preview", // Upgrade to Pro model for better reasoning and detection
       contents: {
         parts: [
           { inlineData: { mimeType: "image/jpeg", data: base64Data } },
-          { text: "Identify all moving items in this image. Return a list." },
+          { text: "List all furniture and distinct items." },
         ],
       },
       config: {
         systemInstruction: SYSTEM_INSTRUCTION_IMAGE,
         responseMimeType: "application/json",
         responseSchema: RESPONSE_SCHEMA,
-        // Deterministic settings to reduce variance in item detection
-        temperature: 0, 
+        temperature: 0.2, 
         topP: 0.95,
         topK: 40,
       },
@@ -155,7 +163,8 @@ export const analyzeImageForInventory = async (base64Data: string): Promise<Inve
     if (!jsonText) throw new Error("No data returned from AI");
 
     const rawItems = JSON.parse(jsonText);
-    return mapRawItemsToInventory(rawItems);
+    const filteredItems = postProcessFilter(rawItems); 
+    return mapRawItemsToInventory(filteredItems);
 
   } catch (error) {
     console.error("Gemini Image Analysis Error:", error);
@@ -163,46 +172,110 @@ export const analyzeImageForInventory = async (base64Data: string): Promise<Inve
   }
 };
 
-export const parseVoiceCommand = async (transcript: string): Promise<InventoryItem[]> => {
-  try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+export const analyzeVideoFrames = async (frames: string[]): Promise<InventoryItem[]> => {
+    if (!frames || frames.length === 0) return [];
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+    try {
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        
+        // Construct multipart request with all frames
+        const parts = frames.map(frame => ({
+            inlineData: { mimeType: "image/jpeg", data: frame }
+        }));
+        
+        // Add text prompt as the last part
+        parts.push({ text: "Analyze this sequence of frames from a walkthrough. Identify unique items." } as any);
+
+        const response = await ai.models.generateContent({
+            model: "gemini-3-pro-preview", // Upgrade to Pro model for better multi-frame consolidation
+            contents: { parts },
+            config: {
+                systemInstruction: SYSTEM_INSTRUCTION_VIDEO,
+                responseMimeType: "application/json",
+                responseSchema: RESPONSE_SCHEMA,
+                temperature: 0.2,
+            },
+        });
+
+        const jsonText = response.text;
+        if (!jsonText) throw new Error("No data returned from AI Video Analysis");
+
+        const rawItems = JSON.parse(jsonText);
+        const filteredItems = postProcessFilter(rawItems);
+        return mapRawItemsToInventory(filteredItems);
+
+    } catch (error) {
+        console.error("Gemini Video Analysis Error:", error);
+        throw error;
+    }
+};
+
+export const parseVoiceCommand = async (transcript: string): Promise<InventoryItem[]> => {
+  if (!transcript || !transcript.trim()) return [];
+
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const modelParams = {
+      model: "gemini-2.5-flash", // Keep flash for fast text processing
       contents: { parts: [{ text: transcript }] },
+  };
+
+  try {
+    const response = await ai.models.generateContent({
+      ...modelParams,
       config: {
         systemInstruction: SYSTEM_INSTRUCTION_VOICE,
         responseMimeType: "application/json",
         responseSchema: RESPONSE_SCHEMA,
-        temperature: 0, // Deterministic voice parsing
+        temperature: 0,
       },
     });
 
     const jsonText = response.text;
     if (!jsonText) throw new Error("No data returned from AI");
-    return mapRawItemsToInventory(JSON.parse(jsonText));
+    
+    const rawItems = JSON.parse(jsonText);
+    const filteredItems = postProcessFilter(rawItems); // Apply hard filter
+    return mapRawItemsToInventory(filteredItems);
 
-  } catch (error) {
-    console.error("Gemini Voice Analysis Error:", error);
-    throw error;
+  } catch (error: any) {
+    console.warn("Gemini Voice Analysis Structured Mode Failed, retrying with fallback...", error);
+    try {
+        const fallbackResponse = await ai.models.generateContent({
+            ...modelParams,
+            config: {
+                systemInstruction: SYSTEM_INSTRUCTION_VOICE + "\nIMPORTANT: Return ONLY a raw JSON array.",
+                responseMimeType: "application/json",
+                temperature: 0,
+            }
+        });
+        
+        const fallbackText = fallbackResponse.text;
+        if (!fallbackText) throw new Error("No data returned from AI (Fallback)");
+        
+        const cleanedText = fallbackText.replace(/```json/g, '').replace(/```/g, '').trim();
+        const rawItems = JSON.parse(cleanedText);
+        const filteredItems = postProcessFilter(rawItems);
+        return mapRawItemsToInventory(filteredItems);
+    } catch (fallbackError) {
+        console.error("Gemini Voice Analysis Fallback Error:", fallbackError);
+        throw fallbackError;
+    }
   }
 };
 
 export const estimateItemStats = async (name: string, category: string): Promise<{ volumeCuFt: number, weightLbs: number }> => {
-  // 1. Try Lookup First
   const refStats = lookupReferenceStats(name);
   if (refStats) {
       return { volumeCuFt: refStats.volumeCuFt, weightLbs: refStats.weightLbs };
   }
 
-  // 2. Fallback to AI for unknown items
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: { parts: [{ text: `Estimate conservative volume and weight for: ${name} (Category: ${category})` }] },
+      contents: { parts: [{ text: `Estimate volume/weight for: ${name} (Category: ${category}). Return JSON {volumeCuFt, weightLbs}.` }] },
       config: {
-        systemInstruction: `You are a moving estimator. Estimate volume (cf) and weight (lbs). Ignore items that are clearly fixed to walls/ceilings. Return JSON.`,
+        systemInstruction: `Moving estimator. Estimate stats. Return 0 if item is negligible/clutter.`,
         responseMimeType: "application/json",
         responseSchema: {
             type: Type.OBJECT,
@@ -212,7 +285,7 @@ export const estimateItemStats = async (name: string, category: string): Promise
             },
             required: ["volumeCuFt", "weightLbs"]
         },
-        temperature: 0.2, // Low temp for more consistent estimation
+        temperature: 0.2,
       }
     });
     
@@ -221,21 +294,18 @@ export const estimateItemStats = async (name: string, category: string): Promise
     
     return JSON.parse(text);
   } catch (error) {
-    console.warn("AI Estimation failed", error);
     return { volumeCuFt: 0, weightLbs: 0 };
   }
 }
 
 const mapRawItemsToInventory = (rawItems: any[]): InventoryItem[] => {
   return rawItems.map((item: any) => {
-    // Perform lookup to correct the name and stats
     const ref = lookupReferenceStats(item.name);
     
     return {
         id: crypto.randomUUID(),
         name: ref ? ref.standardizedName! : item.name,
         quantity: item.quantity,
-        // Use Reference stats if available, otherwise fallback to AI provided stats (or 0)
         volumeCuFt: ref ? ref.volumeCuFt : (item.volumeCuFt || 0),
         weightLbs: ref ? ref.weightLbs : (item.weightLbs || 0),
         category: item.category || "Misc",
