@@ -226,22 +226,19 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
     }
   };
 
-  const handleLogin = async (u: string, p: string) => {
-      if (dbService.isOffline()) {
-          const c = await dbService.loginCompany(u, p);
-          if (c) {
-              if (c.name === 'Super Admin') { setCurrentUserRole('SUPER_ADMIN'); setView('SUPER_ADMIN_DASHBOARD'); }
-              else { setCurrentUserRole('COMPANY_ADMIN'); setCurrentCompanyId(c.id); setView('COMPANY_DASHBOARD'); }
-              return true;
-          }
-          return false;
-      }
-      const user = await signInWithEmail(u, p);
-      if (!user) return false;
-      const profile = await getUserProfile(user.id);
-      if (!profile) { await signOut(); return false; }
-      return true;
-  };
+    const handleLogin = async (u: string, p: string) => {
+    const user = await signInWithEmail(u, p);
+    if (!user) return false;
+
+    const profile = await getUserProfile(user.id);
+    if (!profile) {
+        await signOut();
+        return false;
+    }
+
+    // Role & view routing stays handled by the auth subscription in useEffect
+    return true;
+    };
 
   const handleRequestPasswordReset = async (e: string) => { return { success: true, code: '123456' }; };
   const handleCompletePasswordReset = async () => {};
