@@ -96,7 +96,7 @@ const CameraInput: React.FC<CameraInputProps> = ({ onImageCaptured, onVideoCaptu
   
   // Refs for video capture logic
   const framesRef = useRef<string[]>([]);
-  // Use 'any' to avoid NodeJS namespace issues in browser environments
+  // Use 'any' or ReturnType<typeof setInterval> to avoid NodeJS namespace issues in browser environment
   const intervalRef = useRef<any>(null);
   const timerRef = useRef<any>(null);
 
@@ -247,8 +247,8 @@ const CameraInput: React.FC<CameraInputProps> = ({ onImageCaptured, onVideoCaptu
     const files = event.target.files;
     if (!files || files.length === 0) return;
 
-    // Explicitly cast to File[] to avoid 'unknown' type issues with Array.from in some configs
-    const fileList: File[] = Array.from(files);
+    // Explicitly cast to File[] to fix type inference issues
+    const fileList = Array.from(files) as File[];
     
     // Process Images
     const images = fileList.filter(f => f.type.startsWith('image/'));
@@ -273,7 +273,8 @@ const CameraInput: React.FC<CameraInputProps> = ({ onImageCaptured, onVideoCaptu
                 }
             } catch (e) {
                 console.error("Failed to process uploaded video", e);
-                alert("Could not process video file: " + video.name);
+                // Safe check for video.name just in case, though File always has name
+                alert("Could not process video file: " + (video as any).name);
             }
         }
     }

@@ -16,7 +16,7 @@ import AdminLogin from './components/AdminLogin';
 import AdminDashboard from './components/AdminDashboard';
 import SuperAdminDashboard from './components/SuperAdminDashboard';
 import DatabaseSetupModal from './components/DatabaseSetupModal';
-import { Box, Truck, Plus, LogOut, Lock, Loader2, AlertTriangle, Scale, FileText, Package, Ban } from 'lucide-react';
+import { Box, Truck, Plus, LogOut, Lock, Loader2, AlertTriangle, Scale, FileText, Package, Ban, ArrowRight, ArrowLeft, Database } from 'lucide-react';
 
 interface AppProps {
   initialSlug?: string;
@@ -27,6 +27,7 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   const [view, setView] = useState<ViewMode>('INVENTORY');
   const [currentUserRole, setCurrentUserRole] = useState<UserRole>('GUEST');
   const [currentCompanyId, setCurrentCompanyId] = useState<string | null>(null);
+  const [detectedCompanyId, setDetectedCompanyId] = useState<string | null>(null);
 
   // Limit Check
   const [isLimitReached, setIsLimitReached] = useState(false);
@@ -64,6 +65,7 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
         const companySlug = initialSlug || hashSlug || params.get('slug');
         
         if (companyId) {
+            setDetectedCompanyId(companyId);
             const profile = await dbService.getCompanyPublicProfile(companyId);
             if (profile) {
                 if (profile.usageLimit !== null && profile.usageLimit !== undefined) {
@@ -97,6 +99,7 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
             }
 
             if (profile) {
+                 setDetectedCompanyId(profile.id);
                  if (profile.usageLimit !== null && profile.usageLimit !== undefined) {
                     if ((profile.usageCount || 0) >= profile.usageLimit) {
                         setIsLimitReached(true);
@@ -182,11 +185,13 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
     setError(null);
     try {
       const newItems = await analyzeImageForInventory(base64);
-      // Save & Update
+      // Batch save to prevent multiple re-renders
+      const savedItems = [];
       for (const item of newItems) {
          const saved = await dbService.upsertItem(item, activeJobId);
-         setItems(prev => [...prev, saved]);
+         savedItems.push(saved);
       }
+      setItems(prev => [...prev, ...savedItems]);
     } catch (err) {
       console.error(err);
       setError("Failed to analyze image. Please try again.");
@@ -200,10 +205,13 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
       setError(null);
       try {
           const newItems = await analyzeVideoFrames(frames);
+          // Batch save
+          const savedItems = [];
           for (const item of newItems) {
               const saved = await dbService.upsertItem(item, activeJobId);
-              setItems(prev => [...prev, saved]);
+              savedItems.push(saved);
           }
+          setItems(prev => [...prev, ...savedItems]);
       } catch (err) {
           console.error(err);
           setError("Failed to analyze video. Please try again or use Photo mode.");
@@ -226,19 +234,22 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
     }
   };
 
-    const handleLogin = async (u: string, p: string) => {
-    const user = await signInWithEmail(u, p);
-    if (!user) return false;
-
-    const profile = await getUserProfile(user.id);
-    if (!profile) {
-        await signOut();
-        return false;
-    }
-
-    // Role & view routing stays handled by the auth subscription in useEffect
-    return true;
-    };
+  const handleLogin = async (u: string, p: string) => {
+      if (dbService.isOffline()) {
+          const c = await dbService.loginCompany(u, p);
+          if (c) {
+              if (c.name === 'Super Admin') { setCurrentUserRole('SUPER_ADMIN'); setView('SUPER_ADMIN_DASHBOARD'); }
+              else { setCurrentUserRole('COMPANY_ADMIN'); setCurrentCompanyId(c.id); setView('COMPANY_DASHBOARD'); }
+              return true;
+          }
+          return false;
+      }
+      const user = await signInWithEmail(u, p);
+      if (!user) return false;
+      const profile = await getUserProfile(user.id);
+      if (!profile) { await signOut(); return false; }
+      return true;
+  };
 
   const handleRequestPasswordReset = async (e: string) => { return { success: true, code: '123456' }; };
   const handleCompletePasswordReset = async () => {};
@@ -260,51 +271,64 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
     setError(null);
     try {
         const newItems = await parseVoiceCommand(transcript);
+        // Batch save
+        const savedItems = [];
         for (const item of newItems) {
             const saved = await dbService.upsertItem(item, activeJobId);
-            setItems(p => [...p, saved]);
+            savedItems.push(saved);
         }
+        setItems(p => [...p, ...savedItems]);
     } catch (err) { console.error(err); setError("Voice command failed."); } 
     finally { setIsAnalyzing(false); }
   };
 
   const handleToggleSelect = async (id: string) => {
-    const item = items.find(i => i.id === id);
-    if (item) {
-        const updated = { ...item, selected: !item.selected };
-        setItems(items.map(i => i.id === id ? updated : i));
-        await dbService.upsertItem(updated, activeJobId);
-    }
+    setItems(currentItems => {
+        const item = currentItems.find(i => i.id === id);
+        if (item) {
+            const updated = { ...item, selected: !item.selected };
+            // Fire and forget db update, or handle error if critical
+            dbService.upsertItem(updated, activeJobId).catch(console.error);
+            return currentItems.map(i => i.id === id ? updated : i);
+        }
+        return currentItems;
+    });
   };
 
   const handleSelectAll = async (select: boolean) => {
-      const updated = items.map(i => ({ ...i, selected: select }));
-      setItems(updated);
-      updated.forEach(i => dbService.upsertItem(i, activeJobId));
+      setItems(current => {
+          const updated = current.map(i => ({ ...i, selected: select }));
+          // Bulk update would be better in DB but loop for now
+          updated.forEach(i => dbService.upsertItem(i, activeJobId));
+          return updated;
+      });
   };
 
   const handleUpdateQuantity = async (id: string, d: number) => {
-    const item = items.find(i => i.id === id);
-    if (item) {
-        const updated = { ...item, quantity: Math.max(1, item.quantity + d) };
-        setItems(items.map(i => i.id === id ? updated : i));
-        await dbService.upsertItem(updated, activeJobId);
-    }
+    setItems(current => {
+        const item = current.find(i => i.id === id);
+        if (item) {
+            const updated = { ...item, quantity: Math.max(1, item.quantity + d) };
+            dbService.upsertItem(updated, activeJobId).catch(console.error);
+            return current.map(i => i.id === id ? updated : i);
+        }
+        return current;
+    });
   };
 
   const handleDeleteItem = async (id: string) => {
-    setItems(items.filter(i => i.id !== id));
+    setItems(current => current.filter(i => i.id !== id));
     await dbService.deleteItem(id);
   };
 
   const handleSaveItem = async (data: Partial<InventoryItem>) => {
       if (editingItem) {
           const updated = { ...editingItem, ...data } as InventoryItem;
-          setItems(items.map(i => i.id === editingItem.id ? updated : i));
+          setItems(current => current.map(i => i.id === editingItem.id ? updated : i));
           await dbService.upsertItem(updated, activeJobId);
       } else {
           const newItem = { ...data, id: crypto.randomUUID(), selected: true } as InventoryItem;
-          setItems([...items, newItem]);
+          setItems(current => [...current, newItem]);
           await dbService.upsertItem(newItem, activeJobId);
       }
       setIsModalOpen(false);
@@ -334,10 +358,36 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
       const [l, sL] = useState<CompanyProfile[]>([]);
       useEffect(() => { dbService.getAllCompanies().then(sL); }, []);
       const refresh = () => dbService.getAllCompanies().then(sL);
-      return <SuperAdminDashboard companies={l} onAddCompany={refresh} onDeleteCompany={async (id) => { await handleDeleteCompany(id); refresh(); }} onUpdateCompany={refresh} onLogout={handleLogout} />;
+      return <SuperAdminDashboard companies={l} onAddCompany={refresh} onDeleteCompany={async (id) => { await handleDeleteCompany(id); refresh(); }} onUpdateCompany={refresh} onRefresh={refresh} onLogout={handleLogout} />;
   };
   if (view === 'SUPER_ADMIN_DASHBOARD') return <SuperAdminWrapper />;
   if (view === 'COMPANY_DASHBOARD') return <AdminDashboard settings={settings} onUpdateSettings={handleUpdateSettings} onLogout={handleLogout} />;
+  
+  if (view === 'SUMMARY') {
+    return (
+        <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 pb-32 transition-colors duration-300">
+             <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-40 transition-colors">
+                <div className="max-w-2xl mx-auto px-4 py-4 flex items-center gap-3">
+                     <button onClick={() => setView('INVENTORY')} className="p-2 -ml-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
+                        <ArrowLeft size={24} />
+                     </button>
+                     <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100">Review & Submit</h1>
+                </div>
+             </header>
+             <main className="max-w-2xl mx-auto px-4 py-6">
+                <SummaryPanel 
+                    items={items} 
+                    crmConfig={settings.crmConfig} 
+                    jobDetails={jobDetails} 
+                    adminEmail={settings.adminEmail} 
+                    companyName={settings.companyName} 
+                    onUpdateJobDetails={handleUpdateJobDetails} 
+                    companyId={currentCompanyId || detectedCompanyId}
+                />
+             </main>
+        </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 pb-32 transition-colors duration-300">
@@ -353,6 +403,9 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
             </div>
           </div>
           <div className="flex gap-2">
+            <button onClick={() => setShowDbSetup(true)} className="p-2 text-slate-400 hover:text-purple-600 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition" title="Database Setup">
+                <Database size={20} />
+            </button>
             <button onClick={() => { setEditingItem(undefined); setIsModalOpen(true); }} className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-lg text-sm font-medium transition">
                 <Plus size={16} /> Add Item
             </button>
@@ -413,8 +466,16 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
         />
       </main>
 
+      {/* Floating Action Button for Summary */}
       {items.length > 0 && (
-        <SummaryPanel items={items} crmConfig={settings.crmConfig} jobDetails={jobDetails} adminEmail={settings.adminEmail} companyName={settings.companyName} onUpdateJobDetails={handleUpdateJobDetails} />
+        <div className="fixed bottom-6 left-0 right-0 px-4 z-30 flex justify-center pointer-events-none">
+            <button
+                onClick={() => setView('SUMMARY')}
+                className="pointer-events-auto shadow-xl shadow-blue-900/20 bg-blue-600 hover:bg-blue-700 text-white rounded-full px-6 py-3 font-bold text-lg flex items-center gap-2 transition-all active:scale-95 animate-in slide-in-from-bottom-4"
+            >
+                Review Inventory <ArrowRight size={20} />
+            </button>
+        </div>
       )}
 
       <ItemFormModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onSave={handleSaveItem} initialData={editingItem} />

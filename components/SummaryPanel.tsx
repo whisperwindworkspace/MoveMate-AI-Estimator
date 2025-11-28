@@ -1,26 +1,9 @@
-import React, { useState } from 'react';
+
+import React, { useEffect, useState } from 'react';
 import { InventoryItem, CRMConfig, JobDetails, PackingRequirements } from '../types';
-import {
-  Send,
-  FileText,
-  Scale,
-  Box,
-  X,
-  Mail,
-  CheckCircle2,
-  CloudLightning,
-  Truck,
-  Hash,
-  User,
-  Calendar,
-  ArrowRight,
-  PackageOpen,
-  PenLine,
-  Package,
-  Loader2
-} from 'lucide-react';
+import { Send, Box, Package } from 'lucide-react';
 import { dbService } from '../services/dbService';
-import { emailService } from '../services/emailService';
+import { sendInventoryEmail } from '../services/emailService';
 
 interface SummaryPanelProps {
   items: InventoryItem[];
@@ -29,7 +12,16 @@ interface SummaryPanelProps {
   adminEmail: string;
   companyName: string;
   onUpdateJobDetails: (details: JobDetails) => void;
+  companyId?: string | null;
 }
+
+const EMPTY_PACKING: PackingRequirements = {
+  tvBox: 0,
+  wardrobeBox: 0,
+  mirrorBox: 0,
+  mattressCover: 0,
+  generalNotes: '',
+};
 
 const SummaryPanel: React.FC<SummaryPanelProps> = ({
   items,
@@ -37,607 +29,353 @@ const SummaryPanel: React.FC<SummaryPanelProps> = ({
   jobDetails,
   adminEmail,
   companyName,
-  onUpdateJobDetails
+  onUpdateJobDetails,
+  companyId,
 }) => {
-  const [showConfirmation, setShowConfirmation] = useState(false);
-  const [modalStep, setModalStep] = useState<'DETAILS' | 'PACKING' | 'REVIEW'>('REVIEW');
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
+  const [localJobDetails, setLocalJobDetails] = useState<JobDetails>(jobDetails);
+  const [packing, setPacking] = useState<PackingRequirements>(
+    jobDetails.packingRequirements || EMPTY_PACKING
+  );
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  // Email Sending States
-  const [isSendingEmail, setIsSendingEmail] = useState(false);
-  const [emailSentSuccess, setEmailSentSuccess] = useState(false);
+  // Keep local state in sync if parent updates jobDetails
+  useEffect(() => {
+    setLocalJobDetails(jobDetails);
+    setPacking(jobDetails.packingRequirements || EMPTY_PACKING);
+  }, [jobDetails]);
 
-  // Local state for the details form
-  const [inputMode, setInputMode] = useState<'JOB_ID' | 'MANUAL'>('JOB_ID');
-  const [tempJobId, setTempJobId] = useState('');
-  const [tempName, setTempName] = useState('');
-  const [tempDate, setTempDate] = useState(new Date().toISOString().split('T')[0]);
-
-  // Local state for packing reqs
-  const [packingReqs, setPackingReqs] = useState<PackingRequirements>({
-    tvBox: 0,
-    wardrobeBox: 0,
-    mirrorBox: 0,
-    mattressCover: 0,
-    generalNotes: ''
-  });
-
-  // Calculate totals for SELECTED items only
+  // Use simple truthy check for selection to strictly match InventoryList.tsx logic
   const selectedItems = items.filter(i => i.selected);
+  const boxCount = selectedItems.filter(i => i.category === 'Box').reduce((sum, i) => sum + i.quantity, 0);
+  const otherCount = selectedItems.filter(i => i.category !== 'Box').reduce((sum, i) => sum + i.quantity, 0);
 
-  const totalVolume = selectedItems.reduce(
-    (acc, item) => acc + item.volumeCuFt * item.quantity,
-    0
-  );
-  const totalWeight = selectedItems.reduce(
-    (acc, item) => acc + item.weightLbs * item.quantity,
-    0
-  );
+  // FIX: Multiply unit volume/weight by quantity
+  const totalVolume = selectedItems.reduce((sum, i) => sum + ((i.volumeCuFt || 0) * i.quantity), 0);
+  const totalWeight = selectedItems.reduce((sum, i) => sum + ((i.weightLbs || 0) * i.quantity), 0);
+  const totalPieces = selectedItems.reduce((sum, i) => sum + i.quantity, 0);
 
-  // Separation of counts
-  const boxCount = selectedItems
-    .filter(i => i.category === 'Box')
-    .reduce((acc, i) => acc + i.quantity, 0);
-
-  const otherCount = selectedItems
-    .filter(i => i.category !== 'Box')
-    .reduce((acc, i) => acc + i.quantity, 0);
-
-  const getJobHeader = () => {
-    if (jobDetails.jobId) return `Job ID: ${jobDetails.jobId}`;
-    if (jobDetails.customerName)
-      return `Customer: ${jobDetails.customerName} | Date: ${jobDetails.moveDate}`;
-    return 'Draft Estimate';
-  };
-
-  const hasJobDetails = !!(
-    jobDetails.jobId ||
-    (jobDetails.customerName && jobDetails.moveDate)
-  );
-
-  // Validation check for the Details form
-  const isDetailsValid =
-    inputMode === 'JOB_ID'
-      ? tempJobId.trim().length > 0
-      : tempName.trim().length > 0 && tempDate.trim().length > 0;
-
-  const handleReviewClick = () => {
-    // If we have saved packing reqs, load them
-    if (jobDetails.packingReqs) {
-      setPackingReqs(jobDetails.packingReqs);
-    }
-
-    if (!hasJobDetails) {
-      setModalStep('DETAILS');
-      // Pre-fill fields if partially there
-      setTempJobId(jobDetails.jobId || '');
-      setTempName(jobDetails.customerName || '');
-      setTempDate(jobDetails.moveDate || new Date().toISOString().split('T')[0]);
-    } else {
-      setModalStep('PACKING'); // Go to packing first if details exist
-    }
-    setEmailSentSuccess(false); // Reset
-    setShowConfirmation(true);
-  };
-
-  const handleSaveDetails = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (inputMode === 'JOB_ID' && tempJobId) {
-      onUpdateJobDetails({
-        ...jobDetails,
-        jobId: tempJobId,
-        customerName: undefined,
-        moveDate: undefined
-      });
-      setModalStep('PACKING');
-    } else if (inputMode === 'MANUAL' && tempName && tempDate) {
-      onUpdateJobDetails({
-        ...jobDetails,
-        customerName: tempName,
-        moveDate: tempDate,
-        jobId: undefined
-      });
-      setModalStep('PACKING');
+  const handleJobFieldChange = (field: keyof JobDetails, value: string) => {
+    setLocalJobDetails(prev => ({ ...prev, [field]: value }));
+    // Clear error message when user types
+    if (statusMessage && (field === 'customerName' || field === 'moveDate')) {
+        setStatusMessage(null);
     }
   };
 
-  const handleSavePacking = () => {
-    onUpdateJobDetails({
-      ...jobDetails,
-      packingReqs: packingReqs
+  const handlePackingChange = (field: keyof PackingRequirements, value: number | string) => {
+    setPacking(prev => {
+      const updated = { ...prev, [field]: value };
+      setLocalJobDetails(jd => ({ ...jd, packingRequirements: updated }));
+      return updated;
     });
-    setModalStep('REVIEW');
   };
 
-  const updatePackingCount = (field: keyof PackingRequirements, delta: number) => {
-    setPackingReqs(prev => ({
-      ...prev,
-      [field]: Math.max(0, (prev[field] as number) + delta)
-    }));
-  };
-
-  const handleSendEmail = async () => {
-    setIsSendingEmail(true);
-    try {
-      // Enrich job details with companyName for email tagging
-      const enrichedJobDetails: JobDetails = {
-        ...jobDetails,
-        companyName
-      };
-
-      // Send email via Supabase Edge Function / Resend
-      await emailService.sendInventoryEmail(adminEmail, enrichedJobDetails, items);
-
-      // Also save the job record to DB to track the "Submission" stats
-      const cid = new URLSearchParams(window.location.search).get('cid');
-      // Only log the job if we actually know which company this session belongs to
-      if (cid) {
-        // fire-and-forget; no need to block UI
-        void dbService.createJob({
-          company_id: cid,
-          customer_name: jobDetails.customerName || 'Unknown',
-          job_id_input: jobDetails.jobId || '',
-          total_volume: totalVolume,
-          total_weight: totalWeight,
-          item_count: selectedItems.length,
-          crm_status: 'skipped' // Email only
-        });
-      } else {
-        console.warn('No cid in URL; skipping job logging for email-only flow');
-      }
-
-      setEmailSentSuccess(true);
-
-      // Close modal after short delay
-      setTimeout(() => {
-        setShowConfirmation(false);
-        setEmailSentSuccess(false);
-      }, 2500);
-    } catch (e) {
-      console.error('Failed to send email', e);
-      alert('Could not send email. Please check your connection.');
-    } finally {
-      setIsSendingEmail(false);
+  const handleSubmitInventory = async () => {
+    // 1. Validate Items
+    if (selectedItems.length === 0) {
+      setStatusMessage('Please select at least one item before submitting.');
+      return;
     }
-  };
 
-  const handleCRMSync = async () => {
-    setSyncStatus('syncing');
+    // 2. Validate Mandatory Fields
+    if (!localJobDetails.customerName || !localJobDetails.customerName.trim()) {
+      setStatusMessage('Customer Name is required.');
+      return;
+    }
+
+    if (!localJobDetails.moveDate) {
+      setStatusMessage('Move Date is required.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setStatusMessage(null);
 
     try {
-      // 1. Prepare Payload
-      const payload = {
-        company_id: (
-          await dbService.getCompanyPublicProfile(
-            new URLSearchParams(window.location.search).get('cid') || ''
-          )
-        ).id, // Best effort to get company ID if available via URL, otherwise might be null if purely transient
-        customer_name: jobDetails.customerName || 'Unknown',
-        job_id_input: jobDetails.jobId || '',
-        total_volume: totalVolume,
-        total_weight: totalWeight,
-        item_count: selectedItems.length,
-        crm_status: 'synced' as const,
-        items: selectedItems.map(i => ({ name: i.name, qty: i.quantity })) // Simplified for CRM
+      const urlParams = new URLSearchParams(window.location.search);
+      const cid = companyId || urlParams.get('cid');
+
+      const normalizedDetails: JobDetails = {
+        ...localJobDetails,
+        packingRequirements: packing,
       };
 
-      // 2. Save to Database (for Admin Stats)
-      const cid = new URLSearchParams(window.location.search).get('cid');
+      // 1) Persist job row (usage, analytics) if we know the company
       if (cid) {
-        payload.company_id = cid;
-        await dbService.createJob({
-          company_id: cid,
-          customer_name: jobDetails.customerName || 'Unknown',
-          job_id_input: jobDetails.jobId || '',
-          total_volume: totalVolume,
-          total_weight: totalWeight,
-          item_count: selectedItems.length,
-          crm_status: 'synced'
-        });
-      }
-
-      // 3. Perform Real CRM POST Request
-      if (crmConfig.isConnected && crmConfig.endpointUrl) {
-        const response = await fetch(crmConfig.endpointUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${crmConfig.apiKey}`
-          },
-          body: JSON.stringify(payload)
-        });
-
-        if (!response.ok) {
-          throw new Error(`CRM responded with ${response.status}`);
+        try {
+            await dbService.createJob({
+              company_id: cid,
+              customer_name: normalizedDetails.customerName || 'Unknown',
+              customer_email: normalizedDetails.customerEmail || null,
+              customer_phone: normalizedDetails.customerPhone || null,
+              move_date: normalizedDetails.moveDate || null,
+              origin_address: normalizedDetails.originAddress || null,
+              destination_address: normalizedDetails.destinationAddress || null,
+              status: 'NEW',
+              crm_status: 'skipped',
+              job_id_input: normalizedDetails.jobId || '',
+              total_volume: totalVolume,
+              total_weight: totalWeight,
+              item_count: selectedItems.length,
+            });
+        } catch (dbError) {
+            console.error("Database submission failed (Logging only, continuing to email)", dbError);
+            // We log but continue, so the user can still receive the email
         }
-      } else {
-        // Fallback simulation if no URL provided but marked connected
-        await new Promise(r => setTimeout(r, 1000));
       }
 
-      setSyncStatus('success');
-      setTimeout(() => setSyncStatus('idle'), 3000);
-    } catch (e) {
-      console.error('Sync failed', e);
-      setSyncStatus('error');
-      setTimeout(() => setSyncStatus('idle'), 3000);
+      // 2) Build email body summary - AGGREGATED
+      
+      // Group items by name to avoid duplicate lines (e.g. 2 separate "Nightstand" entries become "2 x Nightstand")
+      const aggregatedItems: Record<string, number> = {};
+      selectedItems.forEach(item => {
+        const name = item.name || 'Unknown Item';
+        const qty = item.quantity || 1;
+        aggregatedItems[name] = (aggregatedItems[name] || 0) + qty;
+      });
+
+      // Sort alphabetically
+      const sortedNames = Object.keys(aggregatedItems).sort((a, b) => a.localeCompare(b));
+      
+      // Build lines
+      const itemLines = sortedNames.map(name => `${aggregatedItems[name]} x ${name}`);
+
+      let emailBody = `Company: ${companyName}
+Customer: ${normalizedDetails.customerName}
+`;
+
+      // Only include Job ID line if it exists
+      if (normalizedDetails.jobId && normalizedDetails.jobId.trim() !== '') {
+        emailBody += `Reference / Job ID (optional): ${normalizedDetails.jobId}\n`;
+      }
+
+      emailBody += `Move date: ${normalizedDetails.moveDate}
+
+Inventory Summary
+**Inventory** (${totalPieces} items)
+Total volume: ${totalVolume.toFixed(2)} ft³
+Total weight: ${Math.round(totalWeight)} lbs
+
+${itemLines.join('\n')}`;
+
+      // STRICT SUBJECT LINE
+      const subjectHeader = "New Inventory";
+
+      // 3) Send email via Edge Function / Resend
+      await sendInventoryEmail({
+        tenantName: companyName,
+        tenantAdminEmail: adminEmail,
+        subjectHeader,
+        body: emailBody,
+      });
+
+      setStatusMessage('Inventory submitted successfully.');
+      onUpdateJobDetails(normalizedDetails);
+    } catch (err: any) {
+      console.error('Submit inventory failed', err);
+      setStatusMessage(
+        'Your submission was saved, but there was a problem sending the email. Please contact support.'
+      );
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return (
-    <>
-      <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-40 p-4 pb-6 md:pb-4 transition-colors">
-        <div className="max-w-2xl mx-auto">
-          <div className="flex justify-between items-end mb-4">
-            <div className="grid grid-cols-2 gap-2 w-full mr-4 opacity-50 grayscale text-[10px] sm:text-xs">
-              <div className="flex flex-col">
-                <span className="text-slate-500 dark:text-slate-400 flex items-center gap-1">
-                  <Package size={10} /> Bx
-                </span>
-                <span className="font-bold text-slate-800 dark:text-slate-200 text-sm">
-                  {boxCount}
-                </span>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-slate-500 dark:text-slate-400 flex items-center gap-1">
-                  <FileText size={10} /> Itm
-                </span>
-                <span className="font-bold text-slate-800 dark:text-slate-200 text-sm">
-                  {otherCount}
-                </span>
-              </div>
-            </div>
+    <section className="mt-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+          <Package className="w-5 h-5" />
+          Inventory Summary
+        </h2>
+        <span className="text-xs text-slate-500">
+          {totalPieces} piece{totalPieces === 1 ? '' : 's'} across {selectedItems.length} entries
+        </span>
+      </div>
 
-            <button
-              onClick={handleReviewClick}
-              disabled={selectedItems.length === 0}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-full shadow-lg shadow-blue-200 dark:shadow-blue-900/30 disabled:opacity-50 disabled:shadow-none transition-all active:scale-95 font-semibold flex items-center gap-2 whitespace-nowrap"
-              title="Review & Send"
-            >
-              Review <Send size={18} />
-            </button>
+      {/* Top-level summary stats (Volume/Weight hidden here, shown in email) */}
+      <div className="grid grid-cols-2 gap-3 text-xs sm:text-sm">
+        <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900 flex flex-col gap-1">
+          <div className="flex items-center gap-2 text-slate-500">
+            <Box className="w-4 h-4" />
+            Boxes
+          </div>
+          <div className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+            {boxCount}
+          </div>
+        </div>
+        <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900 flex flex-col gap-1">
+          <div className="flex items-center gap-2 text-slate-500">
+            <Package className="w-4 h-4" />
+            Other items
+          </div>
+          <div className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+            {otherCount}
           </div>
         </div>
       </div>
 
-      {/* Confirmation Modal */}
-      {showConfirmation && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden flex flex-col max-h-[90vh] border border-slate-100 dark:border-slate-700">
-            {/* MODAL HEADER */}
-            <div className="p-5 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-850">
-              <h3 className="text-lg font-bold text-slate-800 dark:text-white">
-                {modalStep === 'DETAILS'
-                  ? 'Job Information'
-                  : modalStep === 'PACKING'
-                  ? 'Packing Requirements'
-                  : 'Review & Send'}
-              </h3>
-              <button
-                onClick={() => setShowConfirmation(false)}
-                className="text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 p-1 rounded-full transition"
-              >
-                <X size={20} />
-              </button>
-            </div>
+      {/* Job details */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-900 space-y-3">
+        <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+          Job details
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-slate-500">
+              Customer name <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              required
+              value={localJobDetails.customerName || ''}
+              onChange={e => handleJobFieldChange('customerName', e.target.value)}
+              className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 ${
+                  !localJobDetails.customerName && statusMessage?.includes('Customer Name') 
+                  ? 'border-red-500 focus:ring-red-500' 
+                  : 'border-slate-300 dark:border-slate-700 focus:ring-indigo-500'
+              }`}
+              placeholder="John Smith"
+            />
+          </div>
 
-            {/* MODAL BODY */}
-            <div className="p-6 overflow-y-auto">
-              {/* STEP 1: JOB DETAILS FORM */}
-              {modalStep === 'DETAILS' && (
-                <form onSubmit={handleSaveDetails} className="space-y-6">
-                  <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-100 dark:border-blue-800 text-sm text-blue-800 dark:text-blue-300">
-                    <Truck
-                      size={20}
-                      className="mb-2 text-blue-600 dark:text-blue-400"
-                    />
-                    Please provide the job details for this inventory so {companyName} could finish
-                    your estimate/or prepare for your booked job properly.
-                  </div>
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-slate-500">
+              Reference / Job ID (optional)
+            </label>
+            <input
+              type="text"
+              value={localJobDetails.jobId || ''}
+              onChange={e => handleJobFieldChange('jobId', e.target.value)}
+              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="Internal job reference"
+            />
+          </div>
 
-                  <div className="flex bg-slate-100 dark:bg-slate-700 p-1 rounded-lg">
-                    <button
-                      type="button"
-                      onClick={() => setInputMode('JOB_ID')}
-                      className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${
-                        inputMode === 'JOB_ID'
-                          ? 'bg-white dark:bg-slate-600 text-blue-600 dark:text-blue-300 shadow-sm'
-                          : 'text-slate-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'
-                      }`}
-                    >
-                      Job ID
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setInputMode('MANUAL')}
-                      className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${
-                        inputMode === 'MANUAL'
-                          ? 'bg-white dark:bg-slate-600 text-blue-600 dark:text-blue-300 shadow-sm'
-                          : 'text-slate-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'
-                      }`}
-                    >
-                      Manual Entry
-                    </button>
-                  </div>
-
-                  {inputMode === 'JOB_ID' ? (
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                        Job ID Number <span className="text-red-500">*</span>
-                      </label>
-                      <div className="relative">
-                        <Hash
-                          className="absolute left-3 top-3 text-slate-400"
-                          size={20}
-                        />
-                        <input
-                          type="text"
-                          required
-                          value={tempJobId}
-                          onChange={e => setTempJobId(e.target.value)}
-                          placeholder="e.g. JB-4923"
-                          className="w-full pl-10 pr-4 py-3 border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-xl focus:ring-2 focus:ring-blue-500 transition-all text-slate-900 dark:text-white"
-                          autoFocus
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                          Customer Name <span className="text-red-500">*</span>
-                        </label>
-                        <div className="relative">
-                          <User
-                            className="absolute left-3 top-3 text-slate-400"
-                            size={20}
-                          />
-                          <input
-                            type="text"
-                            required
-                            value={tempName}
-                            onChange={e => setTempName(e.target.value)}
-                            placeholder="Jane Doe"
-                            className="w-full pl-10 pr-4 py-3 border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-xl focus:ring-2 focus:ring-blue-500 transition-all text-slate-900 dark:text-white"
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                          Move Date <span className="text-red-500">*</span>
-                        </label>
-                        <div className="relative">
-                          <Calendar
-                            className="absolute left-3 top-3 text-slate-400"
-                            size={20}
-                          />
-                          <input
-                            type="date"
-                            required
-                            value={tempDate}
-                            onChange={e => setTempDate(e.target.value)}
-                            className="w-full pl-10 pr-4 py-3 border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-xl focus:ring-2 focus:ring-blue-500 transition-all text-slate-900 dark:text-white"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <button
-                    type="submit"
-                    disabled={!isDetailsValid}
-                    className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-200 dark:shadow-blue-900/30 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Next: Packing Needs <ArrowRight size={20} />
-                  </button>
-                </form>
-              )}
-
-              {/* STEP 2: PACKING MATERIALS */}
-              {modalStep === 'PACKING' && (
-                <div className="space-y-6">
-                  <div className="text-sm text-slate-600 dark:text-slate-300 mb-2">
-                    Do you need us to bring any special packing materials?
-                  </div>
-
-                  <div className="space-y-3">
-                    {[
-                      { key: 'tvBox', label: 'TV Box (Flat Panel)' },
-                      { key: 'wardrobeBox', label: 'Wardrobe Box (Hanging)' },
-                      { key: 'mirrorBox', label: 'Mirror / Picture Box' },
-                      { key: 'mattressCover', label: 'Mattress Cover' }
-                    ].map(item => (
-                      <div
-                        key={item.key}
-                        className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700 rounded-xl border border-slate-200 dark:border-slate-600"
-                      >
-                        <span className="font-medium text-slate-700 dark:text-slate-200">
-                          {item.label}
-                        </span>
-                        <div className="flex items-center gap-3">
-                          <button
-                            onClick={() =>
-                              updatePackingCount(
-                                item.key as keyof PackingRequirements,
-                                -1
-                              )
-                            }
-                            className="w-8 h-8 flex items-center justify-center bg-white dark:bg-slate-600 border border-slate-300 dark:border-slate-500 rounded-lg text-slate-600 dark:text-slate-200 disabled:opacity-50"
-                            disabled={
-                              !packingReqs[item.key as keyof PackingRequirements]
-                            }
-                          >
-                            -
-                          </button>
-                          <span className="w-6 text-center font-bold dark:text-white">
-                            {packingReqs[item.key as keyof PackingRequirements]}
-                          </span>
-                          <button
-                            onClick={() =>
-                              updatePackingCount(
-                                item.key as keyof PackingRequirements,
-                                1
-                              )
-                            }
-                            className="w-8 h-8 flex items-center justify-center bg-white dark:bg-slate-600 border border-slate-300 dark:border-slate-500 rounded-lg text-blue-600 dark:text-blue-400"
-                          >
-                            +
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-1">
-                      <PenLine size={16} /> Additional Notes & Disassembly Instructions
-                    </label>
-                    <textarea
-                      value={packingReqs.generalNotes}
-                      onChange={e =>
-                        setPackingReqs({
-                          ...packingReqs,
-                          generalNotes: e.target.value
-                        })
-                      }
-                      placeholder="e.g. Please disassemble the King Bed in the master bedroom. Also bring extra boxes for books..."
-                      className="w-full p-3 border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-xl text-sm h-24 focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white"
-                    />
-                  </div>
-
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => setModalStep(hasJobDetails ? 'REVIEW' : 'DETAILS')}
-                      className="flex-1 py-3 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 font-medium rounded-xl transition"
-                    >
-                      Back
-                    </button>
-                    <button
-                      onClick={handleSavePacking}
-                      className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-200 dark:shadow-blue-900/30 transition-all flex items-center justify-center gap-2"
-                    >
-                      Next: Final Review <ArrowRight size={20} />
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* STEP 3: SUMMARY & ACTIONS */}
-              {modalStep === 'REVIEW' && (
-                <div className="space-y-6">
-                  <div className="text-sm text-slate-500 bg-slate-50 dark:bg-slate-700 p-3 rounded-lg border border-slate-100 dark:border-slate-600 flex justify-between items-center">
-                    <div>
-                      <div className="font-medium text-slate-800 dark:text-slate-100">
-                        {getJobHeader()}
-                      </div>
-                      {jobDetails.packingReqs && (
-                        <div className="text-xs text-slate-400 mt-1 flex gap-2">
-                          <span>
-                            <PackageOpen size={10} className="inline" /> Packing included
-                          </span>
-                          {jobDetails.packingReqs.generalNotes && (
-                            <span>• Has notes</span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => setModalStep('PACKING')}
-                      className="text-blue-600 dark:text-blue-400 hover:underline text-xs font-medium"
-                    >
-                      Edit
-                    </button>
-                  </div>
-
-                  <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800 rounded-xl p-4">
-                    <h4 className="text-sm font-semibold text-blue-900 dark:text-blue-300 mb-3 flex items-center gap-2">
-                      <CheckCircle2
-                        size={16}
-                        className="text-blue-600 dark:text-blue-400"
-                      />{' '}
-                      Manifest Summary
-                    </h4>
-                    <div className="grid grid-cols-2 gap-2 text-center">
-                      <div className="bg-white dark:bg-slate-800 p-2 rounded-lg shadow-sm">
-                        <div className="text-[10px] text-slate-500 uppercase font-bold">
-                          Boxes
-                        </div>
-                        <div className="text-lg font-bold text-slate-800 dark:text-white">
-                          {boxCount}
-                        </div>
-                      </div>
-                      <div className="bg-white dark:bg-slate-800 p-2 rounded-lg shadow-sm">
-                        <div className="text-[10px] text-slate-500 uppercase font-bold">
-                          Other Items
-                        </div>
-                        <div className="text-lg font-bold text-slate-800 dark:text-white">
-                          {otherCount}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3 pt-2">
-                    {crmConfig.isConnected && (
-                      <button
-                        onClick={handleCRMSync}
-                        disabled={syncStatus !== 'idle' || isSendingEmail}
-                        className={`w-full py-3 px-4 rounded-xl font-semibold shadow-lg flex items-center justify-center gap-2 transition-all active:scale-95 ${
-                          syncStatus === 'success'
-                            ? 'bg-green-600 text-white shadow-green-200 dark:shadow-green-900/30'
-                            : syncStatus === 'error'
-                            ? 'bg-red-600 text-white shadow-red-200'
-                            : 'bg-indigo-600 text-white shadow-indigo-200 dark:shadow-indigo-900/30 hover:bg-indigo-700'
-                        }`}
-                      >
-                        {syncStatus === 'syncing' ? (
-                          <>Syncing...</>
-                        ) : syncStatus === 'success' ? (
-                          <>
-                            <CheckCircle2 size={20} /> Synced to {crmConfig.provider}
-                          </>
-                        ) : syncStatus === 'error' ? (
-                          <>Sync Failed - Try Again</>
-                        ) : (
-                          <>
-                            <CloudLightning size={20} /> Sync to{' '}
-                            {crmConfig.provider === 'supermove' ? 'Supermove' : 'Salesforce'}
-                          </>
-                        )}
-                      </button>
-                    )}
-
-                    <button
-                      onClick={handleSendEmail}
-                      disabled={isSendingEmail || emailSentSuccess}
-                      className={`w-full py-3 px-4 rounded-xl font-semibold shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${
-                        emailSentSuccess
-                          ? 'bg-green-600 text-white shadow-green-200 dark:shadow-green-900/30'
-                          : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-100 dark:shadow-blue-900/30'
-                      }`}
-                    >
-                      {isSendingEmail ? (
-                        <>
-                          <Loader2 className="animate-spin" size={20} /> Sending...
-                        </>
-                      ) : emailSentSuccess ? (
-                        <>
-                          <CheckCircle2 size={20} /> Sent Successfully
-                        </>
-                      ) : (
-                        <>
-                          <Mail size={20} /> Send via Email
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-slate-500">
+                Move date <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="date"
+              required
+              value={localJobDetails.moveDate || ''}
+              onChange={e => handleJobFieldChange('moveDate', e.target.value)}
+              className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 ${
+                !localJobDetails.moveDate && statusMessage?.includes('Move Date') 
+                ? 'border-red-500 focus:ring-red-500' 
+                : 'border-slate-300 dark:border-slate-700 focus:ring-indigo-500'
+            }`}
+            />
           </div>
         </div>
+      </div>
+
+      {/* Packing requirements */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-900 space-y-3">
+        <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+          Packing requirements (optional)
+        </h3>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-slate-500">TV boxes</label>
+            <input
+              type="number"
+              min={0}
+              value={packing.tvBox || 0}
+              onChange={e =>
+                handlePackingChange('tvBox', Math.max(0, Number(e.target.value || 0)))
+              }
+              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-slate-500">Wardrobe boxes</label>
+            <input
+              type="number"
+              min={0}
+              value={packing.wardrobeBox || 0}
+              onChange={e =>
+                handlePackingChange(
+                  'wardrobeBox',
+                  Math.max(0, Number(e.target.value || 0)),
+                )
+              }
+              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-slate-500">Mirror boxes</label>
+            <input
+              type="number"
+              min={0}
+              value={packing.mirrorBox || 0}
+              onChange={e =>
+                handlePackingChange(
+                  'mirrorBox',
+                  Math.max(0, Number(e.target.value || 0)),
+                )
+              }
+              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-slate-500">
+              Mattress covers
+            </label>
+            <input
+              type="number"
+              min={0}
+              value={packing.mattressCover || 0}
+              onChange={e =>
+                handlePackingChange(
+                  'mattressCover',
+                  Math.max(0, Number(e.target.value || 0)),
+                )
+              }
+              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-1 text-sm">
+          <label className="block text-xs font-medium text-slate-500">
+            Packing notes
+          </label>
+          <textarea
+            value={packing.generalNotes || ''}
+            onChange={e => handlePackingChange('generalNotes', e.target.value)}
+            rows={3}
+            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            placeholder="Anything the crew should know about packing, access, or special handling."
+          />
+        </div>
+      </div>
+
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={handleSubmitInventory}
+          disabled={isSubmitting || selectedItems.length === 0}
+          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Send className="w-4 h-4" />
+          {isSubmitting ? 'Sending…' : 'Send inventory'}
+        </button>
+      </div>
+
+      {statusMessage && (
+        <div className={`text-xs mt-1 font-medium ${
+            statusMessage.includes('required') || statusMessage.includes('problem') 
+            ? 'text-red-500' 
+            : 'text-green-600 dark:text-green-400'
+        }`}>
+          {statusMessage}
+        </div>
       )}
-    </>
+    </section>
   );
 };
 

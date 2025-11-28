@@ -1,3 +1,4 @@
+
 import { InventoryItem, CompanyProfile } from "./types";
 
 export const CATEGORIES = [
@@ -19,13 +20,24 @@ export const ITEM_TAGS = [
 ];
 
 export const FORBIDDEN_KEYWORDS = [
+    // Small/Loose Items
     "book", "magazine", "paper", "file", "folder", "envelope", "dvd", "cd", "game case",
     "cloth", "shirt", "pant", "shoe", "boot", "sneaker", "jacket", "coat", "hat", "glove", "sock", "underwear", "laundry", "towel", "linen", "pillow", "cushion", "blanket", "comforter",
     "dish", "plate", "bowl", "cup", "glass", "mug", "utensil", "fork", "spoon", "knife", "cutlery", "pot", "pan", "skillet", "tray", "tupperware", "container", "bottle", "jar", "can", "food", "spice", "condiment",
-    "kettle", "waffle", "hair dryer", "curling iron", "hand blender",
+    "kettle", "waffle", "hair dryer", "curling iron", "hand blender", "alarm clock", "clip fan",
     "toiletry", "soap", "shampoo", "lotion", "brush", "makeup", "perfume", "medicine", "toothbrush", "toothpaste",
     "remote", "controller", "cable", "charger", "cord", "mouse", "keyboard", "headphone", "earbud", "router", "modem",
-    "toy", "doll", "lego", "figurine", "vase", "picture frame", "photo", "candle", "plant", "flower", "waste basket", "trash can", "garbage", "bin"
+    "toy", "doll", "lego", "figurine", "vase", "picture frame", "photo", "candle", "plant", "flower", "waste basket", "trash can", "garbage", "bin",
+    
+    // Fixtures & Attached Items (Specific exclusions)
+    // NOTE: Do not include generic "fixture" as it might block valid items. List specific house parts.
+    "wall shelf", "floating shelf", "attached shelf", "bracket shelf", "corner shelf attached",
+    "built-in", "built in", "cabinetry", "countertop", "granite", "marble top",
+    "ceiling fan", "sconce", "light switch", "outlet", "thermostat", "smoke detector", "switch plate",
+    "curtain rod", "curtain", "blind", "shutter", "valance", 
+    "towel rack", "toilet paper holder", "grab bar",
+    "sink", "toilet", "bathtub", "shower", "vanity mirror", "medicine cabinet",
+    "chandelier", "pendant light", "track lighting", "recessed light"
 ];
 
 // Mapped exactly from user provided list (Cleaned Version)
@@ -214,7 +226,7 @@ export const STANDARD_MOVING_ITEMS = Object.keys(REFERENCE_ITEM_DATA).sort();
 
 export const INITIAL_INVENTORY: InventoryItem[] = [];
 
-export const DEFAULT_ADMIN_EMAIL = "dispatch@movemate.ai";
+export const DEFAULT_ADMIN_EMAIL = "whisperwindworkspace@gmail.com";
 
 // --- Multi-Tenant Data ---
 

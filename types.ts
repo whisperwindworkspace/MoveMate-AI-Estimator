@@ -38,9 +38,12 @@ export interface PackingRequirements {
 export interface JobDetails {
   jobId?: string;
   customerName?: string;
+  customerEmail?: string;
+  customerPhone?: string;
   moveDate?: string;
-  companyName?: string;
-  packingReqs?: PackingRequirements;
+  originAddress?: string;
+  destinationAddress?: string;
+  packingRequirements?: PackingRequirements;
 }
 
 // Record stored in DB for analytics
@@ -48,6 +51,12 @@ export interface JobRecord {
   id: string;
   company_id: string;
   customer_name: string;
+  customer_email?: string | null;
+  customer_phone?: string | null;
+  move_date?: string | null;
+  origin_address?: string | null;
+  destination_address?: string | null;
+  status?: string;
   job_id_input: string;
   total_volume: number;
   total_weight: number;
@@ -88,4 +97,4 @@ export interface AppSettings {
 
 export type UserRole = 'GUEST' | 'COMPANY_ADMIN' | 'SUPER_ADMIN';
 
-export type ViewMode = 'LANDING' | 'LOGIN' | 'COMPANY_DASHBOARD' | 'SUPER_ADMIN_DASHBOARD' | 'INVENTORY';
+export type ViewMode = 'LANDING' | 'LOGIN' | 'COMPANY_DASHBOARD' | 'SUPER_ADMIN_DASHBOARD' | 'INVENTORY' | 'SUMMARY';

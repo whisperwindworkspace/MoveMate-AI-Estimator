@@ -1,3 +1,4 @@
+
 import { supabase } from './supabaseClient';
 import { UserProfile } from '../types';
 
@@ -54,7 +55,11 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
                 name,
                 slug,
                 admin_email,
-                crm_config
+                crm_config,
+                usage_count,
+                usage_limit,
+                primary_color,
+                logo_url
             )
         `)
         .eq('id', userId)

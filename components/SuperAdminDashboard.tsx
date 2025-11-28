@@ -1,29 +1,19 @@
+
+
 import React, { useMemo, useState } from 'react';
 import { CompanyProfile } from '../types';
 import { dbService } from '../services/dbService';
 import { signUpWithEmail } from '../services/authService';
 import { COMPANIES } from '../config/companies';
 import { CompanyQrCard } from './CompanyQrCard';
-import {
-  Shield,
-  Plus,
-  Trash2,
-  LogOut,
-  Building,
-  User,
-  Loader2,
-  QrCode,
-  X,
-  Edit2,
-  Check,
-  Infinity
-} from 'lucide-react';
+import { Shield, Plus, Trash2, LogOut, Building, User, Loader2, QrCode, X, Edit2, Check, Infinity, RefreshCw } from 'lucide-react';
 
 interface SuperAdminDashboardProps {
   companies: CompanyProfile[];
   onAddCompany: (company: CompanyProfile) => void;
   onDeleteCompany: (id: string) => void;
   onUpdateCompany: () => void;
+  onRefresh: () => void;
   onLogout: () => void;
 }
 
@@ -40,16 +30,18 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   onAddCompany,
   onDeleteCompany,
   onUpdateCompany,
+  onRefresh,
   onLogout
 }) => {
   const [showAddForm, setShowAddForm] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'DB' | 'QR'>('DB');
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const [qrModalOpen, setQrModalOpen] = useState(false);
   const [selectedQrCompany, setSelectedQrCompany] = useState<CompanyProfile | null>(null);
-
+  
   // Inline editing state for limits
   const [editingLimitId, setEditingLimitId] = useState<string | null>(null);
   const [tempLimit, setTempLimit] = useState<string>('');
@@ -77,23 +69,29 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
     setSelectedQrCompany(null);
   };
 
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await onRefresh();
+    setTimeout(() => setIsRefreshing(false), 500);
+  };
+
   const handleEditLimit = (comp: CompanyProfile) => {
-    setEditingLimitId(comp.id);
-    setTempLimit(comp.usageLimit ? comp.usageLimit.toString() : '');
+      setEditingLimitId(comp.id);
+      setTempLimit(comp.usageLimit ? comp.usageLimit.toString() : '');
   };
 
   const handleSaveLimit = async (id: string) => {
-    try {
-      const limitVal = tempLimit.trim() === '' ? null : parseInt(tempLimit);
-      await dbService.updateCompanyLimit(id, limitVal);
-      setEditingLimitId(null);
-      if (onUpdateCompany) {
-        onUpdateCompany();
+      try {
+        const limitVal = tempLimit.trim() === '' ? null : parseInt(tempLimit);
+        await dbService.updateCompanyLimit(id, limitVal);
+        setEditingLimitId(null);
+        if (onUpdateCompany) {
+            onUpdateCompany();
+        }
+      } catch (e) {
+          console.error("Failed to update limit", e);
+          alert("Failed to update usage limit");
       }
-    } catch (e) {
-      console.error('Failed to update limit', e);
-      alert('Failed to update usage limit');
-    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -105,15 +103,14 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
 
     try {
       const computedSlug = slugify(newCompany.name);
-      const limit =
-        newCompany.usageLimit.trim() === '' ? null : parseInt(newCompany.usageLimit);
+      const limit = newCompany.usageLimit.trim() === '' ? null : parseInt(newCompany.usageLimit);
 
       const companyPayload: Partial<CompanyProfile> = {
         name: newCompany.name,
         slug: computedSlug,
         adminEmail: newCompany.adminEmail || newCompany.email,
         crmConfig: { provider: null, isConnected: false, apiKey: '' },
-        username: newCompany.email, // legacy compat only
+        username: newCompany.email,   // legacy compat only
         password: newCompany.password, // legacy compat only
         usageLimit: limit,
         primaryColor: '#2563eb' // Default blue
@@ -131,13 +128,7 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
 
       onAddCompany(createdCompany as CompanyProfile);
       setShowAddForm(false);
-      setNewCompany({
-        name: '',
-        email: '',
-        password: '',
-        adminEmail: '',
-        usageLimit: ''
-      });
+      setNewCompany({ name: '', email: '', password: '', adminEmail: '', usageLimit: '' });
     } catch (err: any) {
       console.error('Creation error', err);
       setError(err.message || 'Failed to create company and user.');
@@ -152,12 +143,21 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
         <div className="flex items-center gap-2 font-bold text-lg text-purple-400">
           <Shield /> Super Admin Console
         </div>
-        <button
-          onClick={onLogout}
-          className="text-slate-400 hover:text-white flex items-center gap-1 text-sm font-medium transition-colors"
-        >
-          <LogOut size={16} /> Logout
-        </button>
+        <div className="flex items-center gap-2">
+            <button
+                onClick={handleRefresh}
+                className="text-slate-400 hover:text-white flex items-center gap-1 text-sm font-medium transition-colors mr-4"
+                title="Refresh Data"
+            >
+                <RefreshCw size={16} className={isRefreshing ? "animate-spin" : ""} /> Refresh Data
+            </button>
+            <button
+            onClick={onLogout}
+            className="text-slate-400 hover:text-white flex items-center gap-1 text-sm font-medium transition-colors"
+            >
+            <LogOut size={16} /> Logout
+            </button>
+        </div>
       </header>
 
       <main className="max-w-6xl mx-auto p-6">
@@ -199,15 +199,11 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
 
             {showAddForm && (
               <div className="bg-slate-800 rounded-xl p-6 mb-8 border border-slate-700 animate-in slide-in-from-top-2">
-                <h3 className="text-lg font-bold mb-4 text-purple-300">
-                  New Company Profile
-                </h3>
+                <h3 className="text-lg font-bold mb-4 text-purple-300">New Company Profile</h3>
                 {error && <div className="text-red-400 text-sm mb-4">{error}</div>}
                 <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-4">
                   <div className="col-span-2">
-                    <label className="text-xs text-slate-400 uppercase font-bold">
-                      Company Name
-                    </label>
+                    <label className="text-xs text-slate-400 uppercase font-bold">Company Name</label>
                     <input
                       placeholder="e.g. Acme Moving"
                       value={newCompany.name}
@@ -216,9 +212,7 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 uppercase font-bold">
-                      Admin Email (Login)
-                    </label>
+                    <label className="text-xs text-slate-400 uppercase font-bold">Admin Email (Login)</label>
                     <input
                       placeholder="admin@acme.com"
                       type="email"
@@ -228,9 +222,7 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 uppercase font-bold">
-                      Password
-                    </label>
+                    <label className="text-xs text-slate-400 uppercase font-bold">Password</label>
                     <input
                       placeholder="••••••••"
                       type="password"
@@ -239,31 +231,23 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                       className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-sm focus:border-purple-500 outline-none mt-1"
                     />
                   </div>
-
+                  
                   <div>
-                    <label className="text-xs text-slate-400 uppercase font-bold">
-                      Dispatch Email
-                    </label>
+                    <label className="text-xs text-slate-400 uppercase font-bold">Dispatch Email</label>
                     <input
                       placeholder="dispatch@acme.com"
                       value={newCompany.adminEmail}
-                      onChange={e =>
-                        setNewCompany({ ...newCompany, adminEmail: e.target.value })
-                      }
+                      onChange={e => setNewCompany({ ...newCompany, adminEmail: e.target.value })}
                       className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-sm focus:border-purple-500 outline-none mt-1"
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 uppercase font-bold">
-                      Usage Limit (Jobs)
-                    </label>
+                    <label className="text-xs text-slate-400 uppercase font-bold">Usage Limit (Jobs)</label>
                     <input
                       placeholder="Leave empty for unlimited"
                       type="number"
                       value={newCompany.usageLimit}
-                      onChange={e =>
-                        setNewCompany({ ...newCompany, usageLimit: e.target.value })
-                      }
+                      onChange={e => setNewCompany({ ...newCompany, usageLimit: e.target.value })}
                       className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-sm focus:border-purple-500 outline-none mt-1"
                     />
                   </div>
@@ -296,8 +280,7 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                 const intakeUrl = `${baseUrl}/#${slug}`;
                 const usage = comp.usageCount || 0;
                 const limit = comp.usageLimit;
-                const isLimitReached =
-                  limit !== null && limit !== undefined && usage >= limit;
+                const isLimitReached = limit !== null && limit !== undefined && usage >= limit;
 
                 return (
                   <div
@@ -309,65 +292,45 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                         <Building size={18} className="text-slate-400" />
                         <h3 className="font-bold text-lg">{comp.name}</h3>
                         {isLimitReached && (
-                          <span className="text-[10px] bg-red-900/50 text-red-300 border border-red-800 px-2 py-0.5 rounded font-bold uppercase tracking-wide">
-                            Limit Reached
-                          </span>
+                             <span className="text-[10px] bg-red-900/50 text-red-300 border border-red-800 px-2 py-0.5 rounded font-bold uppercase tracking-wide">
+                                Limit Reached
+                             </span>
                         )}
                         {comp.primaryColor && comp.primaryColor !== '#2563eb' && (
-                          <span
-                            className="w-3 h-3 rounded-full border border-slate-600"
-                            style={{ backgroundColor: comp.primaryColor }}
-                            title="Brand Color Set"
-                          ></span>
+                             <span className="w-3 h-3 rounded-full border border-slate-600" style={{ backgroundColor: comp.primaryColor }} title="Brand Color Set"></span>
                         )}
                       </div>
 
                       <div className="flex gap-4 text-sm text-slate-400 flex-wrap items-center">
-                        {/* Email hidden – only a generic label shown */}
                         <span className="flex items-center gap-1">
-                          <User size={14} /> Admin account on file
+                          <User size={14} /> {comp.adminEmail}
                         </span>
-
+                        
                         {/* Usage Limit Display/Edit */}
                         <div className="flex items-center gap-2 bg-slate-900 px-2 py-1 rounded border border-slate-700">
-                          <span className="text-xs uppercase font-bold text-slate-500">
-                            Usage:
-                          </span>
-                          <span
-                            className={`font-mono ${
-                              isLimitReached ? 'text-red-400' : 'text-slate-200'
-                            }`}
-                          >
-                            {usage} /{' '}
-                            {editingLimitId === comp.id ? (
-                              <input
-                                type="number"
-                                value={tempLimit}
-                                onChange={e => setTempLimit(e.target.value)}
-                                className="w-16 bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs text-white"
-                                placeholder="∞"
-                                autoFocus
-                              />
-                            ) : (
-                              limit ?? <Infinity size={14} className="inline" />
-                            )}
-                          </span>
-
-                          {editingLimitId === comp.id ? (
-                            <button
-                              onClick={() => handleSaveLimit(comp.id)}
-                              className="text-green-400 hover:text-green-300"
-                            >
-                              <Check size={14} />
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handleEditLimit(comp)}
-                              className="text-slate-500 hover:text-purple-400"
-                            >
-                              <Edit2 size={12} />
-                            </button>
-                          )}
+                             <span className="text-xs uppercase font-bold text-slate-500">Usage:</span>
+                             <span className={`font-mono ${isLimitReached ? 'text-red-400' : 'text-slate-200'}`}>
+                                {usage} / {editingLimitId === comp.id ? (
+                                    <input 
+                                        type="number" 
+                                        value={tempLimit} 
+                                        onChange={(e) => setTempLimit(e.target.value)}
+                                        className="w-16 bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-xs text-white"
+                                        placeholder="∞"
+                                        autoFocus
+                                    />
+                                ) : (limit ?? <Infinity size={14} className="inline"/>)}
+                             </span>
+                             
+                             {editingLimitId === comp.id ? (
+                                <button onClick={() => handleSaveLimit(comp.id)} className="text-green-400 hover:text-green-300">
+                                    <Check size={14} />
+                                </button>
+                             ) : (
+                                <button onClick={() => handleEditLimit(comp)} className="text-slate-500 hover:text-purple-400">
+                                    <Edit2 size={12} />
+                                </button>
+                             )}
                         </div>
 
                         <span
@@ -377,9 +340,7 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                               : 'border-slate-600'
                           }`}
                         >
-                          {comp.crmConfig?.isConnected
-                            ? comp.crmConfig.provider
-                            : 'No CRM'}
+                          {comp.crmConfig?.isConnected ? comp.crmConfig.provider : 'No CRM'}
                         </span>
                       </div>
                     </div>
@@ -441,8 +402,8 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {COMPANIES.map(comp => (
-                <CompanyQrCard
-                  key={comp.slug}
+                <CompanyQrCard 
+                  key={comp.slug} 
                   name={comp.name}
                   url={`${baseUrl}/#${comp.slug}`} // Removed /c/ and /#/
                   description="Scan to start inventory"
