@@ -15,8 +15,7 @@ import CRMConfigModal from './components/CRMConfigModal';
 import AdminLogin from './components/AdminLogin';
 import AdminDashboard from './components/AdminDashboard';
 import SuperAdminDashboard from './components/SuperAdminDashboard';
-import DatabaseSetupModal from './components/DatabaseSetupModal';
-import { Box, Truck, Plus, LogOut, Lock, Loader2, AlertTriangle, Scale, FileText, Package, Ban, ArrowRight, ArrowLeft, Database } from 'lucide-react';
+import { Box, Truck, Plus, LogOut, Lock, Loader2, AlertTriangle, Scale, FileText, Package, Ban, ArrowRight, ArrowLeft } from 'lucide-react';
 
 interface AppProps {
   initialSlug?: string;
@@ -53,7 +52,6 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<InventoryItem | undefined>(undefined);
-  const [showDbSetup, setShowDbSetup] = useState(false);
 
   // --- 1. Initialization (Deep Link + Auth) ---
   useEffect(() => {
@@ -403,9 +401,6 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
             </div>
           </div>
           <div className="flex gap-2">
-            <button onClick={() => setShowDbSetup(true)} className="p-2 text-slate-400 hover:text-purple-600 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition" title="Database Setup">
-                <Database size={20} />
-            </button>
             <button onClick={() => { setEditingItem(undefined); setIsModalOpen(true); }} className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-lg text-sm font-medium transition">
                 <Plus size={16} /> Add Item
             </button>
@@ -479,7 +474,6 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
       )}
 
       <ItemFormModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onSave={handleSaveItem} initialData={editingItem} />
-      {showDbSetup && <DatabaseSetupModal onClose={() => setShowDbSetup(false)} />}
     </div>
   );
 };
