@@ -1,4 +1,5 @@
 
+
 import React, { useState } from 'react';
 import { Database, Copy, CheckCircle, RefreshCw, X } from 'lucide-react';
 
@@ -8,15 +9,29 @@ interface DatabaseSetupModalProps {
 
 const SQL_SCRIPT = `
 -- ==========================================
--- 0. CLEANUP (Drop policies to prevent conflicts)
+-- 0. CLEANUP & SCHEMA FIX (Critical for 428C9)
 -- ==========================================
+-- Drop existing policies
 DROP POLICY IF EXISTS "Public Access Items" ON inventory_items;
 DROP POLICY IF EXISTS "Public Access Companies" ON companies;
 DROP POLICY IF EXISTS "Public Access Users" ON users;
-DROP POLICY IF EXISTS "Public Access Storage" ON storage.objects;
 DROP POLICY IF EXISTS "Public Access Jobs" ON jobs;
 DROP POLICY IF EXISTS "public_insert_jobs" ON jobs;
 DROP POLICY IF EXISTS "Enable insert for everyone" ON jobs;
+DROP POLICY IF EXISTS "Enable read for everyone" ON jobs;
+DROP POLICY IF EXISTS "Enable update for everyone" ON jobs;
+
+-- Fix "Generated Column" error (428C9) on usage_count.
+-- We force drop the column if it exists (generated or not) and re-create it as a plain integer.
+ALTER TABLE companies DROP COLUMN IF EXISTS usage_count CASCADE;
+ALTER TABLE companies ADD COLUMN usage_count integer DEFAULT 0;
+
+-- Ensure usage_used exists and is an integer (Syncing with usage_count)
+ALTER TABLE companies DROP COLUMN IF EXISTS usage_used CASCADE;
+ALTER TABLE companies ADD COLUMN usage_used integer DEFAULT 0;
+
+-- Ensure jobs table does NOT have a stray usage_count column
+ALTER TABLE jobs DROP COLUMN IF EXISTS usage_count;
 
 -- ==========================================
 -- 1. FIX MISSING COLUMNS
@@ -24,7 +39,6 @@ DROP POLICY IF EXISTS "Enable insert for everyone" ON jobs;
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS admin_email text;
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS crm_config jsonb;
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS usage_limit integer DEFAULT NULL;
-ALTER TABLE companies ADD COLUMN IF NOT EXISTS usage_count integer DEFAULT 0;
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS slug text;
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS primary_color text DEFAULT '#2563eb';
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url text;
@@ -44,8 +58,6 @@ ALTER TABLE jobs ADD COLUMN IF NOT EXISTS status text;
 -- 2. CREATE TABLES (If they don't exist)
 -- ==========================================
 
-insert into storage.buckets (id, name, public) values ('images', 'images', true) ON CONFLICT DO NOTHING;
-
 create table if not exists companies (
   id uuid primary key default gen_random_uuid(),
   name text,
@@ -56,6 +68,7 @@ create table if not exists companies (
   password text,
   usage_limit integer,
   usage_count integer default 0,
+  usage_used integer default 0,
   primary_color text default '#2563eb',
   logo_url text
 );
@@ -102,23 +115,38 @@ create table if not exists jobs (
 );
 
 -- ==========================================
--- 3. FUNCTIONS (RPC)
+-- 3. FUNCTIONS & TRIGGERS
 -- ==========================================
 
--- Function to safely increment usage count atomically
-CREATE OR REPLACE FUNCTION increment_usage_count(row_id uuid)
-RETURNS void
+-- Trigger Function to handle new job creation and increment usage automatically
+CREATE OR REPLACE FUNCTION public.handle_new_job()
+RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 BEGIN
-  UPDATE companies
-  SET usage_count = COALESCE(usage_count, 0) + 1
-  WHERE id = row_id;
+  -- Increment usage_count.
+  -- Sync usage_used to match the new usage_count to ensure equality.
+  -- This relies on the fact that standard update uses old value for calculation.
+  UPDATE public.companies
+  SET 
+    usage_count = COALESCE(usage_count, 0) + 1,
+    usage_used = COALESCE(usage_count, 0) + 1
+  WHERE id = NEW.company_id;
+  RETURN NEW;
 END;
 $$;
 
--- Function to upsert inventory items securely
+-- Create/Recreate Trigger on jobs table
+DROP TRIGGER IF EXISTS on_job_created ON public.jobs;
+CREATE TRIGGER on_job_created
+AFTER INSERT ON public.jobs
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_new_job();
+
+
+-- Function to upsert inventory items securely (Used by App)
+DROP FUNCTION IF EXISTS anon_upsert_inventory_item(uuid, text, text, numeric, numeric, numeric, text, text[], boolean, boolean, numeric);
 CREATE OR REPLACE FUNCTION anon_upsert_inventory_item(
   p_id uuid,
   p_job_id text,
@@ -154,39 +182,62 @@ BEGIN
 END;
 $$;
 
+-- Function to programmatically reload schema cache (Self-Healing)
+CREATE OR REPLACE FUNCTION reload_schema_cache()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  NOTIFY pgrst, 'reload config';
+END;
+$$;
+
 -- ==========================================
 -- 4. SECURITY POLICIES (RLS) & PERMISSIONS
 -- ==========================================
 alter table inventory_items enable row level security;
 alter table companies enable row level security;
 alter table users enable row level security;
-alter table storage.objects enable row level security;
 alter table jobs enable row level security;
 
 -- PERMISSIONS (Crucial for anon access)
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION increment_usage_count TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION anon_upsert_inventory_item TO anon, authenticated, service_role;
+
+-- Grant with explicit signatures to avoid ambiguity
+GRANT EXECUTE ON FUNCTION anon_upsert_inventory_item(uuid, text, text, numeric, numeric, numeric, text, text[], boolean, boolean, numeric) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION reload_schema_cache() TO anon, authenticated, service_role;
 
 -- POLICIES (Re-create strict but functional policies)
 create policy "Public Access Items" on inventory_items for all using (true) with check (true);
-create policy "Public Access Companies" on companies for all using (true) with check (true);
+create policy "Public Access Companies" on companies for select using (true); 
+-- Note: Companies update is handled by RPC/Trigger, so mostly select needed for anon
+
 create policy "Public Access Users" on users for all using (true) with check (true);
-create policy "Public Access Storage" on storage.objects for all using (true) with check (true);
 
 -- CRITICAL: Allow anonymous users to insert jobs for submission
+-- This ensures that when a user submits from the public link, it works.
 create policy "Enable insert for everyone" on jobs for insert with check (true);
 create policy "Enable read for everyone" on jobs for select using (true);
 create policy "Enable update for everyone" on jobs for update using (true);
 
 -- ==========================================
--- 5. SEED DATA
+-- 5. SEED DATA & CONFIG
 -- ==========================================
 INSERT INTO companies (name, slug, admin_email, crm_config)
 VALUES ('Super Admin', 'super-admin', 'admin@movemate.ai', '{"provider": null, "isConnected": false}')
 ON CONFLICT DO NOTHING;
+
+-- SYNC DATA: Ensure all existing rows have usage_used = usage_count
+UPDATE companies SET usage_used = usage_count;
+
+-- ==========================================
+-- 6. RELOAD SCHEMA CACHE (Fix for PGRST204)
+-- ==========================================
+-- This notifies PostgREST to reload the schema immediately
+NOTIFY pgrst, 'reload config';
 `;
 
 const DatabaseSetupModal: React.FC<DatabaseSetupModalProps> = ({ onClose }) => {
@@ -212,7 +263,7 @@ const DatabaseSetupModal: React.FC<DatabaseSetupModalProps> = ({ onClose }) => {
             <div>
               <h1 className="text-xl font-bold text-white">Database Schema Update</h1>
               <p className="text-slate-400 text-sm mt-1">
-                Run this updated SQL script to fix permissions and submission tracking.
+                Run this updated SQL script in the Supabase SQL Editor to fix permissions, missing columns, and schema cache errors.
               </p>
             </div>
           </div>

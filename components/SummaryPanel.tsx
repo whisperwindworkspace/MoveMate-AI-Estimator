@@ -1,7 +1,8 @@
 
+
 import React, { useEffect, useState } from 'react';
 import { InventoryItem, CRMConfig, JobDetails, PackingRequirements } from '../types';
-import { Send, Box, Package } from 'lucide-react';
+import { Send, Box, Package, CheckCircle } from 'lucide-react';
 import { dbService } from '../services/dbService';
 import { sendInventoryEmail } from '../services/emailService';
 
@@ -37,6 +38,7 @@ const SummaryPanel: React.FC<SummaryPanelProps> = ({
     jobDetails.packingRequirements || EMPTY_PACKING
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   // Keep local state in sync if parent updates jobDetails
@@ -89,6 +91,20 @@ const SummaryPanel: React.FC<SummaryPanelProps> = ({
       return;
     }
 
+    // 3. Validate Company Context (Strict Security)
+    if (!companyId) {
+        // This is a fail-safe. App.tsx should block this earlier, but we ensure no submission passes without an ID.
+        // Try to recover ID from URL if prop is missing (edge case)
+        const urlParams = new URLSearchParams(window.location.search);
+        const cidFromUrl = urlParams.get('cid');
+        
+        if (!cidFromUrl) {
+            console.error("Submission blocked: Missing Company ID context.");
+            setStatusMessage('Error: Unauthorized submission attempt. Missing Company ID.');
+            return;
+        }
+    }
+
     setIsSubmitting(true);
     setStatusMessage(null);
 
@@ -101,10 +117,14 @@ const SummaryPanel: React.FC<SummaryPanelProps> = ({
         packingRequirements: packing,
       };
 
+      console.log('--- Submission Started ---');
+      console.log('Detected Company ID:', cid);
+
       // 1) Persist job row (usage, analytics) if we know the company
       if (cid) {
         try {
-            await dbService.createJob({
+            console.log('Calling dbService.createJob...');
+            const newJob = await dbService.createJob({
               company_id: cid,
               customer_name: normalizedDetails.customerName || 'Unknown',
               customer_email: normalizedDetails.customerEmail || null,
@@ -119,10 +139,13 @@ const SummaryPanel: React.FC<SummaryPanelProps> = ({
               total_weight: totalWeight,
               item_count: selectedItems.length,
             });
-        } catch (dbError) {
-            console.error("Database submission failed (Logging only, continuing to email)", dbError);
+            console.log('Job created successfully in DB:', newJob);
+        } catch (dbError: any) {
+            console.error("Database submission failed (Logging only, continuing to email)", JSON.stringify(dbError, null, 2));
             // We log but continue, so the user can still receive the email
         }
+      } else {
+          console.warn('Submission skipping database log: No Company ID found. Check URL parameters or Slug.');
       }
 
       // 2) Build email body summary - AGGREGATED
@@ -163,15 +186,21 @@ ${itemLines.join('\n')}`;
       const subjectHeader = "New Inventory";
 
       // 3) Send email via Edge Function / Resend
+      console.log('Sending email...');
       await sendInventoryEmail({
         tenantName: companyName,
         tenantAdminEmail: adminEmail,
         subjectHeader,
         body: emailBody,
       });
+      console.log('Email sent successfully.');
 
       setStatusMessage('Inventory submitted successfully.');
       onUpdateJobDetails(normalizedDetails);
+      
+      // TRIGGER SUCCESS SCREEN
+      setIsSubmitted(true);
+      
     } catch (err: any) {
       console.error('Submit inventory failed', err);
       setStatusMessage(
@@ -181,6 +210,39 @@ ${itemLines.join('\n')}`;
       setIsSubmitting(false);
     }
   };
+
+  if (isSubmitted) {
+      return (
+        <div className="flex flex-col items-center justify-center py-16 px-4 text-center animate-in fade-in zoom-in duration-300">
+          <div className="w-24 h-24 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded-full flex items-center justify-center mb-6 shadow-sm">
+            <CheckCircle size={48} strokeWidth={3} />
+          </div>
+          <h2 className="text-3xl font-bold text-slate-900 dark:text-slate-100 mb-4">
+            Submission Complete!
+          </h2>
+          <p className="text-lg text-slate-600 dark:text-slate-300 mb-8 max-w-md leading-relaxed">
+            Thank you, <strong>{localJobDetails.customerName}</strong>.<br/>
+            Your inventory has been successfully sent to <strong>{companyName}</strong>.
+          </p>
+          
+          {localJobDetails.jobId && (
+            <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 max-w-sm w-full mb-8">
+                <div className="text-sm text-slate-500 dark:text-slate-400 mb-1 uppercase font-semibold tracking-wider">Reference ID</div>
+                <div className="text-xl font-mono font-bold text-slate-800 dark:text-slate-200 tracking-wide">
+                    {localJobDetails.jobId}
+                </div>
+            </div>
+          )}
+
+          <button 
+            onClick={() => window.location.reload()}
+            className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold shadow-lg shadow-blue-200 dark:shadow-blue-900/20 transition-all active:scale-95"
+          >
+            Start New Estimate
+          </button>
+        </div>
+      );
+  }
 
   return (
     <section className="mt-6 space-y-4">

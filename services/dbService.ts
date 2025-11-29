@@ -1,24 +1,18 @@
 
-import { supabase } from './supabaseClient';
-import { InventoryItem, CompanyProfile, JobRecord } from '../types';
 
-// --- Offline Storage (Memory) ---
-let isOfflineMode = false;
-let memItems: any[] = [];
-let memCompanies: any[] = [];
-let memJobs: any[] = [];
+import { supabase } from './supabaseClient';
+import { InventoryItem, CompanyProfile, JobRecord, AppSettings } from '../types';
 
 // --- Mappers ---
 const mapDbItemToApp = (dbItem: any): InventoryItem => ({
   id: dbItem.id,
   name: dbItem.name || 'Unknown Item',
   quantity: Number(dbItem.quantity) || 1,
-  // inventory_items uses volume_cuft; fall back to volume_cu_ft for legacy rows
-  volumeCuFt: Number(dbItem.volume_cuft ?? dbItem.volume_cu_ft ?? 0),
+  // inventory_items uses volume_cu_ft; fall back to volume_cu_ft for legacy rows
+  volumeCuFt: Number(dbItem.volume_cu_ft ?? dbItem.volume_cuft ?? 0),
   weightLbs: Number(dbItem.weight_lbs) || 0,
   category: dbItem.category || 'Misc',
   tags: Array.isArray(dbItem.tags) ? dbItem.tags : [],
-  // inventory_items does not store these; we just provide defaults for the UI
   imageUrl: dbItem.image_url || undefined,
   selected: dbItem.selected ?? true,
   confidence: dbItem.confidence ?? 1.0,
@@ -30,19 +24,25 @@ const mapAppItemToDb = (item: InventoryItem, jobId: string) => ({
   job_id: jobId,
   name: item.name,
   quantity: item.quantity,
-  // match the actual column name on inventory_items
-  volume_cuft: item.volumeCuFt,
+  volume_cu_ft: item.volumeCuFt,
   weight_lbs: item.weightLbs,
   category: item.category,
   tags: item.tags,
-  // map tags into the booleans that exist on inventory_items
-  is_fragile: item.tags?.includes('Fragile') ?? false,
-  is_heavy: item.tags?.includes('Heavy') ?? false,
+  image_url: item.imageUrl ?? null,
+  selected: item.selected,
   confidence: item.confidence,
+  disassembly: item.disassembly ?? null,
 });
 
-// Very lightweight UUID guard so we don't blow up Supabase on bad IDs
-const isValidUUID = (uuid: string) => {
+// Utility to generate UUID
+const generateUUID = () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (globalThis.crypto || (globalThis as any).msCrypto).randomUUID();
+};
+
+// Small helper to validate uuids
+const isValidUUID = (uuid: string | null | undefined): uuid is string => {
+  if (!uuid) return false;
   const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   return regex && regex.test(uuid);
 };
@@ -50,518 +50,416 @@ const isValidUUID = (uuid: string) => {
 // --- Services ---
 
 export const dbService = {
+  // Always return false to enforce online mode
   isOffline() {
-    return isOfflineMode;
+    return false;
   },
 
-  // CHECK CONNECTION / MODE SWITCH
-
+  // CHECK CONNECTION
   async checkConnection() {
     try {
       const { error } = await supabase.from('companies').select('id').limit(1);
-      if (error) throw error;
-      isOfflineMode = false;
+      if (error) {
+        console.error('checkConnection DB error:', JSON.stringify(error, null, 2));
+        return false;
+      }
       return true;
     } catch (e) {
-      console.warn('Falling back to offline mode:', e);
-      isOfflineMode = true;
+      console.error('checkConnection exception:', e);
       return false;
     }
   },
 
   // INVENTORY ITEMS
 
-  async getItemsForJob(jobId: string): Promise<InventoryItem[]> {
-    if (isOfflineMode) {
-      return memItems.filter(i => i.job_id === jobId).map(mapDbItemToApp);
-    }
-
-    if (!isValidUUID(jobId)) {
-      console.warn('getItemsForJob called with non-UUID jobId, returning empty list:', jobId);
-      return [];
-    }
-
-    const { data, error } = await supabase
-      .from('inventory_items')
-      .select('*')
-      .eq('job_id', jobId)
-      .order('created_at', { ascending: true });
-
-    if (error || !data) {
-      console.error('getItemsForJob error', error);
-      return [];
-    }
-
-    return data.map(mapDbItemToApp);
-  },
-
-  async upsertItem(item: InventoryItem, jobId: string | null): Promise<InventoryItem> {
-    if (!jobId) {
-      // No job yet; we treat items as transient until a job exists
-      return item;
-    }
-
-    if (isOfflineMode) {
-      const existingIndex = memItems.findIndex(i => i.id === item.id);
-      if (existingIndex >= 0) {
-        memItems[existingIndex] = {
-          ...memItems[existingIndex],
-          ...mapAppItemToDb(item, jobId),
-        };
-      } else {
-        memItems.push(mapAppItemToDb(item, jobId));
-      }
-      return item;
-    }
-
+  async fetchInventoryItems(jobId: string): Promise<InventoryItem[]> {
     try {
-      // Use the SECURITY DEFINER RPC to bypass RLS weirdness on inventory_items
-      const { error } = await supabase.rpc('anon_upsert_inventory_item', {
-        p_id: item.id,
-        p_job_id: jobId,
-        p_name: item.name,
-        p_quantity: item.quantity,
-        p_volume_cuft: item.volumeCuFt,
-        p_weight_lbs: item.weightLbs,
-        p_category: item.category,
-        p_tags: item.tags,
-        p_is_fragile: item.tags?.includes('Fragile') ?? false,
-        p_is_heavy: item.tags?.includes('Heavy') ?? false,
-        p_confidence: item.confidence,
-      });
+      const { data, error } = await supabase
+        .from('inventory_items')
+        .select('*')
+        .eq('job_id', jobId)
+        .order('created_at', { ascending: true });
 
       if (error) {
-          // Fallback to standard upsert if RPC missing or failed
-          // This ensures data is saved even if the SQL script hasn't been fully run
-          console.warn("RPC upsert failed, trying standard upsert", error);
-          const { error: upsertError } = await supabase.from('inventory_items').upsert({
-               id: item.id,
-               job_id: jobId,
-               name: item.name,
-               quantity: item.quantity,
-               volume_cu_ft: item.volumeCuFt,
-               weight_lbs: item.weightLbs,
-               category: item.category,
-               tags: item.tags,
-               confidence: item.confidence,
-               selected: item.selected
-          });
-          if (upsertError) throw upsertError;
+        console.error('fetchInventoryItems error', JSON.stringify(error, null, 2));
+        throw error;
       }
-      return item;
+
+      return (data || []).map(mapDbItemToApp);
     } catch (e) {
-      console.error('upsertItem error', e);
-      return item;
-    }
-  },
-
-  async deleteItem(id: string): Promise<void> {
-    if (isOfflineMode) {
-      memItems = memItems.filter(i => i.id !== id);
-      return;
-    }
-
-    if (!isValidUUID(id)) {
-      console.warn('deleteItem called with non-UUID id:', id);
-      return;
-    }
-
-    const { error } = await supabase.from('inventory_items').delete().eq('id', id);
-    if (error) {
-      console.error('deleteItem error', error);
-    }
-  },
-
-  async clearItemsForJob(jobId: string): Promise<void> {
-    if (isOfflineMode) {
-      memItems = memItems.filter(i => i.job_id !== jobId);
-      return;
-    }
-
-    if (!isValidUUID(jobId)) {
-      console.warn('clearItemsForJob called with non-UUID jobId:', jobId);
-      return;
-    }
-
-    const { error } = await supabase.from('inventory_items').delete().eq('job_id', jobId);
-    if (error) {
-      console.error('clearItemsForJob error', error);
+      console.error('fetchInventoryItems exception', e);
+      throw e;
     }
   },
 
   async getItems(jobId: string): Promise<InventoryItem[]> {
-    return this.getItemsForJob(jobId);
+    return this.fetchInventoryItems(jobId);
   },
 
-  async updateJobId(oldId: string, newId: string) {
-    // This helper is used in App.tsx when changing job ID
-    // We need to move items from oldId to newId
-    const items = await this.getItemsForJob(oldId);
-    for (const item of items) {
-      await this.upsertItem(item, newId);
-    }
-    await this.clearItemsForJob(oldId);
+  async upsertItem(item: InventoryItem, jobId: string): Promise<InventoryItem> {
+    return this.upsertInventoryItem(jobId, item);
   },
 
-  // COMPANIES / TENANTS
-
-  async getCompanyPublicProfile(id: string): Promise<CompanyProfile | null> {
-    if (isOfflineMode) {
-      const found = memCompanies.find(c => c.id === id);
-      if (!found) return null;
-      return {
-        id: found.id,
-        name: found.name,
-        username: found.username,
-        password: found.password,
-        adminEmail: found.admin_email,
-        crmConfig: found.crm_config,
-        usageLimit: found.usage_limit,
-        usageCount: found.usage_used,
-        primaryColor: found.primary_color,
-        logoUrl: found.logo_url,
-      };
+  async upsertInventoryItem(jobId: string, item: InventoryItem): Promise<InventoryItem> {
+    // Normalize: ensure id
+    if (!item.id) {
+      item.id = generateUUID();
     }
 
     try {
-      const { data, error } = await supabase
-        .from('companies')
-        .select('*')
-        .eq('id', id)
-        .single();
+      const payload = mapAppItemToDb(item, jobId);
 
-      if (error || !data) return null;
+      // Direct table upsert
+      const { error } = await supabase.from('inventory_items').upsert(payload);
+
+      if (error) {
+        throw error;
+      }
+
+      return item;
+    } catch (e: any) {
+      // Handle Schema Cache Error with Self-Healing logic
+      if (e?.code === 'PGRST204') {
+         console.warn("PGRST204 detected: Schema cache stale. Attempting auto-heal via reload_schema_cache...");
+         
+         try {
+             const { error: rpcError } = await supabase.rpc('reload_schema_cache');
+             
+             if (!rpcError) {
+                 console.log("Schema cache reloaded successfully. Retrying upsert...");
+                 // Retry the upsert operation once
+                 const payload = mapAppItemToDb(item, jobId);
+                 const { error: retryError } = await supabase.from('inventory_items').upsert(payload);
+                 
+                 if (!retryError) {
+                     console.log("Upsert succeeded after auto-heal.");
+                     return item;
+                 } else {
+                     console.error("Retry failed:", JSON.stringify(retryError, null, 2));
+                 }
+             } else {
+                 console.error("Auto-heal failed (RPC likely missing):", JSON.stringify(rpcError, null, 2));
+             }
+         } catch (healEx) {
+             console.error("Exception during auto-heal:", healEx);
+         }
+
+         const msg = "Database schema cache is stale. 'selected' column missing. Please ask Admin to run 'NOTIFY pgrst, 'reload config';' in SQL Editor.";
+         // Throw a standard Error object so it prints nicely in console
+         throw new Error(msg);
+      }
+      
+      console.error('upsertInventoryItem exception:', JSON.stringify(e, null, 2));
+      throw e; 
+    }
+  },
+
+  async deleteInventoryItem(jobId: string, itemId: string): Promise<void> {
+    try {
+      const { error } = await supabase
+        .from('inventory_items')
+        .delete()
+        .eq('job_id', jobId)
+        .eq('id', itemId);
+
+      if (error) {
+        console.error('deleteInventoryItem error', JSON.stringify(error, null, 2));
+        throw error;
+      }
+    } catch (e) {
+      console.error('deleteInventoryItem exception', e);
+      throw e;
+    }
+  },
+
+  async deleteItem(id: string): Promise<void> {
+    try {
+      const { error } = await supabase.from('inventory_items').delete().eq('id', id);
+      if (error) throw error;
+    } catch (e) {
+      console.error('deleteItem error', e);
+      throw e;
+    }
+  },
+
+  async updateJobId(oldId: string, newId: string): Promise<void> {
+    try {
+      const { error } = await supabase.from('inventory_items').update({ job_id: newId }).eq('job_id', oldId);
+      if (error) throw error;
+    } catch (e) {
+      console.error('updateJobId error', e);
+      throw e;
+    }
+  },
+
+  // COMPANIES
+
+  async getCompanies(): Promise<CompanyProfile[]> {
+    try {
+      const { data, error } = await supabase.from('companies').select('*');
+
+      if (error) {
+        console.error('getCompanies error', JSON.stringify(error, null, 2));
+        throw error;
+      }
+
+      return (data || []).map((c: any) => ({
+        id: c.id,
+        name: c.name,
+        slug: c.slug,
+        usageLimit: c.usage_limit ?? null,
+        usageCount: c.usage_count ?? 0,
+        adminEmail: c.admin_email ?? '',
+        crmConfig: c.crm_config ?? null,
+        primaryColor: c.primary_color ?? '#2563eb',
+        logoUrl: c.logo_url ?? '',
+      }));
+    } catch (e) {
+      console.error('getCompanies exception', e);
+      throw e;
+    }
+  },
+
+  async getAllCompanies(): Promise<CompanyProfile[]> {
+    return this.getCompanies();
+  },
+
+  async getCompanyPublicProfile(idOrSlug: string): Promise<CompanyProfile | null> {
+    try {
+      const query = supabase.from('companies').select('*').limit(1);
+      let finalQuery = query;
+
+      if (isValidUUID(idOrSlug)) {
+        finalQuery = finalQuery.eq('id', idOrSlug);
+      } else {
+        finalQuery = finalQuery.eq('slug', idOrSlug);
+      }
+
+      const { data, error } = await finalQuery.single();
+
+      if (error) {
+        // Not found or error
+        return null;
+      }
+
+      const c = data as any;
 
       return {
-        id: data.id,
-        name: data.name,
-        username: data.username,
-        password: data.password,
-        adminEmail: data.admin_email,
-        crmConfig: data.crm_config || {
-          provider: null,
-          isConnected: false,
-          apiKey: '',
-        },
-        usageLimit: data.usage_limit,
-        usageCount: data.usage_count || data.usage_used || 0,
-        primaryColor: data.primary_color,
-        logoUrl: data.logo_url,
+        id: c.id,
+        name: c.name,
+        slug: c.slug,
+        usageLimit: c.usage_limit ?? null,
+        usageCount: c.usage_count ?? 0,
+        adminEmail: c.admin_email ?? '',
+        crmConfig: c.crm_config ?? null,
+        primaryColor: c.primary_color ?? '#2563eb',
+        logoUrl: c.logo_url ?? '',
       };
     } catch (e) {
-      console.error('Get company profile exception:', e);
+      console.error('getCompanyPublicProfile exception', e);
       return null;
     }
   },
 
   async getCompanyBySlug(slug: string): Promise<CompanyProfile | null> {
-    if (isOfflineMode) {
-      const found = memCompanies.find(c => c.slug === slug);
-      if (!found) return null;
-      return {
-        id: found.id,
-        name: found.name,
-        slug: found.slug,
-        username: found.username,
-        password: found.password,
-        adminEmail: found.admin_email,
-        crmConfig: found.crm_config,
-        usageLimit: found.usage_limit,
-        usageCount: found.usage_used,
-        primaryColor: found.primary_color,
-        logoUrl: found.logo_url,
-      };
-    }
-
     try {
       const { data, error } = await supabase
         .from('companies')
         .select('*')
         .eq('slug', slug)
-        .single();
+        .maybeSingle();
 
-      if (error || !data) return null;
+      if (error) {
+        console.error('getCompanyBySlug error', JSON.stringify(error, null, 2));
+        return null;
+      }
 
+      if (!data) return null;
+
+      const c = data as any;
       return {
-        id: data.id,
-        name: data.name,
-        slug: data.slug,
-        username: data.username,
-        password: data.password,
-        adminEmail: data.admin_email,
-        crmConfig: data.crm_config || {
-          provider: null,
-          isConnected: false,
-          apiKey: '',
-        },
-        usageLimit: data.usage_limit,
-        usageCount: data.usage_count || data.usage_used || 0,
-        primaryColor: data.primary_color,
-        logoUrl: data.logo_url,
+        id: c.id,
+        name: c.name,
+        slug: c.slug,
+        usageLimit: c.usage_limit ?? null,
+        usageCount: c.usage_count ?? 0,
+        adminEmail: c.admin_email ?? '',
+        crmConfig: c.crm_config ?? null,
+        primaryColor: c.primary_color ?? '#2563eb',
+        logoUrl: c.logo_url ?? '',
       };
     } catch (e) {
-      console.error('Get company by slug exception:', e);
+      console.error('getCompanyBySlug exception', e);
       return null;
     }
   },
 
-  async getAllCompanies(): Promise<CompanyProfile[]> {
-    if (isOfflineMode) {
-      return memCompanies.map(c => ({
-        id: c.id,
-        name: c.name,
-        slug: c.slug,
-        username: c.username,
-        password: c.password,
-        adminEmail: c.admin_email,
-        crmConfig: c.crm_config,
-        usageLimit: c.usage_limit,
-        usageCount: c.usage_used,
-        primaryColor: c.primary_color,
-        logoUrl: c.logo_url,
-      }));
+  async incrementCompanyUsage(companyId: string): Promise<void> {
+    // Deprecated: Usage is now incremented via DB Trigger (handle_new_job) on insert.
+    // Keeping this function only for legacy/manual admin usage if needed.
+    console.warn("incrementCompanyUsage called manually. This should be handled by DB Trigger now.");
+  },
+  
+  async loginCompany(u: string, p: string): Promise<CompanyProfile | null> {
+    // Only used for offline mode mock login. 
+    // Since we are strictly online, this is not used.
+    return null;
+  },
+  
+  async createCompany(partial: Partial<CompanyProfile>): Promise<CompanyProfile> {
+      const { data, error } = await supabase.from('companies').insert({
+          name: partial.name,
+          slug: partial.slug,
+          admin_email: partial.adminEmail,
+          crm_config: partial.crmConfig,
+          usage_limit: partial.usageLimit,
+          primary_color: partial.primaryColor,
+          username: partial.username,
+          password: partial.password
+      }).select().single();
+      
+      if (error) throw error;
+      
+      return {
+          id: data.id,
+          name: data.name,
+          slug: data.slug,
+          adminEmail: data.admin_email,
+          crmConfig: data.crm_config,
+          usageLimit: data.usage_limit,
+          usageCount: data.usage_count,
+          primaryColor: data.primary_color,
+          logoUrl: data.logo_url
+      } as CompanyProfile;
+  },
+  
+  async deleteCompany(id: string): Promise<void> {
+      const { error } = await supabase.from('companies').delete().eq('id', id);
+      if (error) throw error;
+  },
+  
+  async updateCompanySettings(id: string, settings: Partial<AppSettings>): Promise<void> {
+      const { error } = await supabase.from('companies').update({
+          admin_email: settings.adminEmail,
+          crm_config: settings.crmConfig,
+          primary_color: settings.primaryColor,
+          logo_url: settings.logoUrl
+      }).eq('id', id);
+      if (error) throw error;
+  },
+  
+  async updateCompanyLimit(id: string, limit: number | null): Promise<void> {
+      const { error } = await supabase.from('companies').update({ usage_limit: limit }).eq('id', id);
+      if (error) throw error;
+  },
+
+  // JOBS
+
+  async createJob(job: Partial<JobRecord>): Promise<JobRecord> {
+    console.log('dbService: createJob called', job);
+    if (!job.company_id || !isValidUUID(job.company_id)) {
+      const msg = 'createJob called without valid company_id; no job will be created.';
+      console.error(msg, job);
+      throw new Error(msg);
+    }
+    
+    // SERVER-SIDE LIMIT CHECK (Double Protection)
+    const companyProfile = await this.getCompanyPublicProfile(job.company_id);
+    if (companyProfile && companyProfile.usageLimit !== null && companyProfile.usageLimit !== undefined) {
+        if ((companyProfile.usageCount || 0) >= companyProfile.usageLimit) {
+             const msg = `Usage Limit Reached for Company ${companyProfile.name}. Submission Rejected.`;
+             console.error(msg);
+             throw new Error(msg);
+        }
     }
 
+    const id = job.id ?? generateUUID();
+    const payload: any = {
+      ...job,
+      id,
+    };
+    
+    console.log('dbService: inserting job payload', payload);
+
     try {
-      const { data, error } = await supabase.from('companies').select('*');
-      if (error || !data) return [];
-      return data.map(c => ({
-        id: c.id,
-        name: c.name,
-        slug: c.slug,
-        username: c.username,
-        password: c.password,
-        adminEmail: c.admin_email,
-        crmConfig: c.crm_config || {
-          provider: null,
-          isConnected: false,
-          apiKey: '',
-        },
-        usageLimit: c.usage_limit,
-        usageCount: c.usage_count || c.usage_used || 0,
-        primaryColor: c.primary_color,
-        logoUrl: c.logo_url,
-      }));
+      const { error } = await supabase.from('jobs').insert(payload);
+
+      if (error) {
+        console.error('Create Job Error', JSON.stringify(error, null, 2));
+        throw error;
+      }
+
+      console.log('Job created successfully. DB Trigger will increment usage.');
+      
+      // Removed manual incrementCompanyUsage call to avoid double counting.
+      // The DB trigger 'on_job_created' handles this atomically.
+
+      const newJob: JobRecord = {
+        ...(payload as any),
+        created_at: (payload as any).created_at ?? new Date().toISOString(),
+      };
+
+      return newJob;
     } catch (e) {
-      return [];
+      console.error('Create Job Exception', JSON.stringify(e, null, 2));
+      throw e;
     }
   },
 
-  async createCompany(company: Partial<CompanyProfile>) {
-    if (isOfflineMode) {
-      const newComp = {
-        id: crypto.randomUUID(),
-        name: company.name,
-        slug: company.slug,
-        username: company.username,
-        password: company.password,
-        admin_email: company.adminEmail,
-        crm_config: company.crmConfig,
-        usage_limit: company.usageLimit,
-        usage_used: 0,
-        primary_color: company.primaryColor,
-      };
-      memCompanies.push(newComp);
-      return newComp;
+  async fetchJobsForCompany(companyId: string): Promise<JobRecord[]> {
+    if (!isValidUUID(companyId)) {
+      console.warn('fetchJobsForCompany called with invalid companyId', companyId);
+      return [];
     }
 
     try {
       const { data, error } = await supabase
-        .from('companies')
-        .insert({
-          name: company.name,
-          slug: company.slug,
-          username: company.username,
-          password: company.password,
-          admin_email: company.adminEmail,
-          crm_config: company.crmConfig,
-          usage_limit: company.usageLimit,
-          usage_count: 0,
-          primary_color: company.primaryColor,
-        })
-        .select()
-        .single();
+        .from('jobs')
+        .select('*')
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: false });
 
-      if (error) throw error;
-      return data;
-    } catch (e) {
-      console.error('Create company error', e);
-    }
-  },
-
-  async deleteCompany(id: string) {
-    if (isOfflineMode) {
-      memCompanies = memCompanies.filter(c => c.id !== id);
-      return;
-    }
-    const { error } = await supabase.from('companies').delete().eq('id', id);
-    if (error) throw error;
-  },
-
-  async loginCompany(username: string, password: string): Promise<CompanyProfile | null> {
-    // Only used in offline mode emulation for login
-    if (isOfflineMode) {
-      const found = memCompanies.find(
-        c => c.username === username && c.password === password,
-      );
-      if (found) {
-        return {
-          id: found.id,
-          name: found.name,
-          adminEmail: found.admin_email,
-          crmConfig: found.crm_config,
-        } as CompanyProfile;
-      }
-    }
-    return null;
-  },
-
-  async updateCompanySettings(id: string, updates: Partial<CompanyProfile>) {
-    if (isOfflineMode) {
-      const idx = memCompanies.findIndex(c => c.id === id);
-      if (idx < 0) return;
-
-      if (updates.adminEmail) memCompanies[idx].admin_email = updates.adminEmail;
-      if (updates.crmConfig) memCompanies[idx].crm_config = updates.crmConfig;
-      if (updates.primaryColor) memCompanies[idx].primary_color = updates.primaryColor;
-      if (updates.logoUrl) memCompanies[idx].logo_url = updates.logoUrl;
-      return;
-    }
-
-    const payload: any = {};
-    if (updates.adminEmail !== undefined) payload.admin_email = updates.adminEmail;
-    if (updates.crmConfig !== undefined) payload.crm_config = updates.crmConfig;
-    if (updates.primaryColor !== undefined) payload.primary_color = updates.primaryColor;
-    if (updates.logoUrl !== undefined) payload.logo_url = updates.logoUrl;
-
-    if (Object.keys(payload).length === 0) return;
-
-    const { error } = await supabase.from('companies').update(payload).eq('id', id);
-    if (error) {
-      console.error('updateCompanySettings error', error);
-    }
-  },
-
-  async updateCompanyUsageLimit(id: string, usageLimit: number | null) {
-    if (isOfflineMode) {
-      const idx = memCompanies.findIndex(c => c.id === id);
-      if (idx < 0) return;
-      memCompanies[idx].usage_limit = usageLimit;
-      return;
-    }
-
-    const { error } = await supabase
-      .from('companies')
-      .update({ usage_limit: usageLimit })
-      .eq('id', id);
-    if (error) {
-      console.error('updateCompanyUsageLimit error', error);
-    }
-  },
-
-  async updateCompanyLimit(id: string, limit: number | null) {
-    return this.updateCompanyUsageLimit(id, limit);
-  },
-
-  async incrementCompanyUsage(companyId: string) {
-    if (isOfflineMode) {
-        // Already handled in memory array in createJob for offline mode
-        return;
-    }
-    
-    if (!isValidUUID(companyId)) {
-       console.error("Attempted to increment usage for invalid UUID:", companyId);
-       return;
-    }
-
-    // Attempt to use the RPC function for atomic increment
-    try {
-        console.log("Attemping to increment usage for company:", companyId);
-        const { error } = await supabase.rpc('increment_usage_count', { row_id: companyId });
-        if (error) throw error;
-        console.log("Usage incremented successfully via RPC");
-    } catch (e) {
-        console.warn("RPC increment failed, falling back to read-write", e);
-        // Fallback: Read count, then update (Not atomic, but better than nothing if RPC missing)
-        const { data } = await supabase.from('companies').select('usage_count').eq('id', companyId).single();
-        if (data) {
-             const newCount = (data.usage_count || 0) + 1;
-             await supabase.from('companies').update({ usage_count: newCount }).eq('id', companyId);
-             console.log("Usage incremented via fallback (new count):", newCount);
-        }
-    }
-  },
-
-  // JOBS (analytics + usage count; 30-day retention handled in DB)
-
-  async createJob(job: Partial<JobRecord>) {
-    if (isOfflineMode) {
-      const newJob = {
-        ...job,
-        id: crypto.randomUUID(),
-        created_at: new Date().toISOString(),
-      };
-      memJobs.push(newJob);
-      // Increment usage in memory
-      if (job.company_id) {
-        const comp = memCompanies.find(c => c.id === job.company_id);
-        if (comp) {
-          comp.usage_used = (comp.usage_used || 0) + 1;
-        }
-      }
-      return newJob;
-    }
-
-    // Generate an id on the client so we don't need RETURNING
-    const id = job.id ?? crypto.randomUUID();
-    const payload = { ...job, id };
-
-    try {
-      const { error } = await supabase.from('jobs').insert(payload); // no .select(), no .single()
-      if (error) throw error;
-
-      // Strictly enforce usage update upon submission
-      if (job.company_id && isValidUUID(job.company_id)) {
-          console.log("Job created, incrementing usage...");
-          await this.incrementCompanyUsage(job.company_id);
-      } else {
-          console.warn("Job created but no valid company_id present. Usage NOT incremented.");
+      if (error) {
+        console.error('fetchJobsForCompany error', JSON.stringify(error, null, 2));
+        throw error;
       }
 
-      // Return the job shape the rest of the app expects
-      return { ...payload } as JobRecord;
+      return (data || []) as JobRecord[];
     } catch (e) {
-      console.error('Create Job Error', e);
-      throw e; // Throw error so UI knows submission failed
+      console.error('fetchJobsForCompany exception', e);
+      throw e;
     }
   },
-
+  
   async getCompanyJobs(companyId: string): Promise<JobRecord[]> {
-    if (isOfflineMode) {
-      return memJobs.filter(j => j.company_id === companyId) as JobRecord[];
-    }
-
-    const { data, error } = await supabase
-      .from('jobs')
-      .select('*')
-      .eq('company_id', companyId)
-      .order('created_at', { ascending: false });
-
-    if (error || !data) {
-      console.error('getCompanyJobs error', error);
-      return [];
-    }
-
-    return data as JobRecord[];
+      return this.fetchJobsForCompany(companyId);
   },
 
-  // LOW-LEVEL IMAGE STORAGE HELPER (ONLY USED IF CALLED; DOES NOT TOUCH JOBS)
+  async fetchJobById(jobId: string): Promise<JobRecord | null> {
+    if (!isValidUUID(jobId)) {
+      console.warn('fetchJobById called with invalid jobId', jobId);
+      return null;
+    }
 
-  /**
-   * Stores a base64 image string in Supabase Storage and returns
-   * a public URL. If storage fails, falls back to the base64 data URL.
-   * This is a utility and not wired into the inventory flow by default.
-   */
+    try {
+      const { data, error } = await supabase
+        .from('jobs')
+        .select('*')
+        .eq('id', jobId)
+        .maybeSingle();
+
+      if (error) {
+        console.error('fetchJobById error', JSON.stringify(error, null, 2));
+        throw error;
+      }
+
+      return (data as JobRecord) || null;
+    } catch (e) {
+      console.error('fetchJobById exception', e);
+      throw e;
+    }
+  },
+
   async uploadImage(base64Data: string): Promise<string> {
     try {
       const byteCharacters = atob(base64Data);

@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { InventoryItem } from '../types';
-import { Trash2, Package, Truck, Box, Sofa, CheckCircle2, Circle, Edit2, Zap, Monitor, Armchair, AlertTriangle, CheckSquare, Square } from 'lucide-react';
+import { Trash2, Package, Truck, Box, Sofa, CheckCircle2, Circle, Edit2, Monitor, Armchair, AlertTriangle, CheckSquare, Square } from 'lucide-react';
 
 interface InventoryListProps {
   items: InventoryItem[];
@@ -91,99 +91,114 @@ const InventoryList: React.FC<InventoryListProps> = ({
             </div>
         </div>
 
-      {items.map((item) => (
-        <div 
-          key={item.id} 
-          className={`relative bg-white dark:bg-slate-900 rounded-xl shadow-sm border transition-all duration-200 ${
-            item.selected 
-            ? 'border-blue-200 dark:border-blue-900 ring-1 ring-blue-50 dark:ring-blue-900/20 opacity-100' 
-            : 'border-slate-100 dark:border-slate-800 opacity-60 bg-slate-50 dark:bg-slate-950 grayscale-[0.5]'
-          }`}
-        >
-          {/* Selection Toggle Overlay */}
-          <div 
-            className="absolute top-0 left-0 bottom-0 w-12 cursor-pointer z-10 flex items-center justify-center border-r border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded-l-xl group"
-            onClick={() => onToggleSelect(item.id)}
-          >
-            {item.selected ? (
-              <CheckCircle2 className="text-blue-500 fill-white dark:fill-slate-900" size={24} />
-            ) : (
-              <Circle className="text-slate-300 dark:text-slate-600 fill-white dark:fill-slate-900 group-hover:text-slate-400 dark:group-hover:text-slate-500" size={24} />
-            )}
-          </div>
+      {items.map((item) => {
+        const isLowConfidence = item.confidence !== undefined && item.confidence < 0.7;
+        const isSelected = item.selected;
 
-          <div className="p-4 pl-14">
-            <div className="flex justify-between items-start mb-2">
-              <div className="flex items-center gap-3">
-                {item.imageUrl ? (
-                    <img src={item.imageUrl} alt={item.name} className="w-12 h-12 rounded-lg object-cover border border-slate-100 dark:border-slate-700 shadow-sm" />
+        return (
+            <div 
+              key={item.id} 
+              className={`relative rounded-xl shadow-sm border transition-all duration-200 ${
+                isSelected 
+                ? isLowConfidence
+                    ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 ring-1 ring-amber-200 dark:ring-amber-900/40 opacity-100'
+                    : 'bg-white dark:bg-slate-900 border-blue-200 dark:border-blue-900 ring-1 ring-blue-50 dark:ring-blue-900/20 opacity-100' 
+                : 'border-slate-100 dark:border-slate-800 opacity-60 bg-slate-50 dark:bg-slate-950 grayscale-[0.5]'
+              }`}
+            >
+              {/* Selection Toggle Overlay */}
+              <div 
+                className="absolute top-0 left-0 bottom-0 w-12 cursor-pointer z-10 flex items-center justify-center border-r border-transparent hover:bg-slate-50/50 dark:hover:bg-slate-800/50 rounded-l-xl group"
+                onClick={() => onToggleSelect(item.id)}
+              >
+                {isSelected ? (
+                  isLowConfidence ? (
+                     <CheckCircle2 className="text-amber-500 fill-white dark:fill-slate-900" size={24} />
+                  ) : (
+                     <CheckCircle2 className="text-blue-500 fill-white dark:fill-slate-900" size={24} />
+                  )
                 ) : (
-                    <span className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-100 dark:border-slate-700">
-                        {getIcon(item.category)}
-                    </span>
+                  <Circle className="text-slate-300 dark:text-slate-600 fill-white dark:fill-slate-900 group-hover:text-slate-400 dark:group-hover:text-slate-500" size={24} />
                 )}
-                
-                <div>
-                    <h4 className={`font-semibold text-sm sm:text-base flex items-center gap-2 ${item.selected ? 'text-slate-800 dark:text-slate-100' : 'text-slate-500 dark:text-slate-600 line-through'}`}>
-                        {item.name}
-                        {item.confidence !== undefined && item.confidence < 0.7 && item.selected && (
-                            <span className="text-orange-500" title="Low confidence AI detection. Please verify.">
-                                <AlertTriangle size={14} />
-                            </span>
-                        )}
-                    </h4>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider text-slate-500 bg-slate-100 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
-                            {item.category || 'Misc'}
+              </div>
+
+              <div className="p-4 pl-14">
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex items-center gap-3">
+                    {item.imageUrl ? (
+                        <img src={item.imageUrl} alt={item.name} className="w-12 h-12 rounded-lg object-cover border border-slate-100 dark:border-slate-700 shadow-sm" />
+                    ) : (
+                        <span className={`p-3 rounded-lg border shadow-sm ${
+                             isSelected && isLowConfidence 
+                             ? 'bg-amber-100 dark:bg-amber-900/40 border-amber-200 dark:border-amber-800' 
+                             : 'bg-slate-50 dark:bg-slate-800 border-slate-100 dark:border-slate-700'
+                        }`}>
+                            {getIcon(item.category)}
                         </span>
-                        {item.tags && item.tags.map(tag => (
-                            <span key={tag} className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border ring-1 ring-inset ${getTagColor(tag)}`}>
-                                {tag}
+                    )}
+                    
+                    <div>
+                        <h4 className={`font-semibold text-sm sm:text-base flex items-center gap-2 ${isSelected ? 'text-slate-800 dark:text-slate-100' : 'text-slate-500 dark:text-slate-600 line-through'}`}>
+                            {item.name}
+                            {isSelected && isLowConfidence && (
+                                <span className="text-amber-600 dark:text-amber-400 animate-pulse" title="Low confidence AI detection. Please verify this item name.">
+                                    <AlertTriangle size={16} />
+                                </span>
+                            )}
+                        </h4>
+                        <div className="flex flex-wrap gap-2 mt-2">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider text-slate-500 bg-slate-100 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+                                {item.category || 'Misc'}
                             </span>
-                        ))}
+                            {item.tags && item.tags.map(tag => (
+                                <span key={tag} className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border ring-1 ring-inset ${getTagColor(tag)}`}>
+                                    {tag}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button 
+                        onClick={() => onEditItem(item)}
+                        className="text-slate-400 hover:text-blue-500 p-2 rounded hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors"
+                      >
+                        <Edit2 size={16} />
+                      </button>
+                      <button 
+                        onClick={() => onDeleteItem(item.id)}
+                        className="text-slate-400 hover:text-red-500 p-2 rounded hover:bg-red-50 dark:hover:bg-slate-800 transition-colors"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                  </div>
+                </div>
+                
+                {/* Quantity Controls */}
+                <div className="mt-4 flex items-center justify-between">
+                    <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-lg p-1">
+                        <button 
+                            onClick={() => onUpdateQuantity(item.id, -1)}
+                            className="w-8 h-8 flex items-center justify-center bg-white dark:bg-slate-700 rounded shadow-sm text-slate-600 dark:text-slate-200 hover:text-blue-600 dark:hover:text-blue-400 disabled:opacity-50"
+                            disabled={!isSelected || item.quantity <= 1}
+                        >
+                            -
+                        </button>
+                        <span className="w-10 text-center font-semibold text-slate-700 dark:text-slate-200">{item.quantity}</span>
+                        <button 
+                            onClick={() => onUpdateQuantity(item.id, 1)}
+                            className="w-8 h-8 flex items-center justify-center bg-white dark:bg-slate-700 rounded shadow-sm text-slate-600 dark:text-slate-200 hover:text-blue-600 dark:hover:text-blue-400 disabled:opacity-50"
+                            disabled={!isSelected}
+                        >
+                            +
+                        </button>
                     </div>
                 </div>
               </div>
-
-              <div className="flex items-center gap-1">
-                 <button 
-                    onClick={() => onEditItem(item)}
-                    className="text-slate-400 hover:text-blue-500 p-2 rounded hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors"
-                  >
-                    <Edit2 size={16} />
-                  </button>
-                  <button 
-                    onClick={() => onDeleteItem(item.id)}
-                    className="text-slate-400 hover:text-red-500 p-2 rounded hover:bg-red-50 dark:hover:bg-slate-800 transition-colors"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-              </div>
             </div>
-            
-            {/* Quantity Controls */}
-            <div className="mt-4 flex items-center justify-between">
-                <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-lg p-1">
-                    <button 
-                        onClick={() => onUpdateQuantity(item.id, -1)}
-                        className="w-8 h-8 flex items-center justify-center bg-white dark:bg-slate-700 rounded shadow-sm text-slate-600 dark:text-slate-200 hover:text-blue-600 dark:hover:text-blue-400 disabled:opacity-50"
-                        disabled={!item.selected || item.quantity <= 1}
-                    >
-                        -
-                    </button>
-                    <span className="w-10 text-center font-semibold text-slate-700 dark:text-slate-200">{item.quantity}</span>
-                    <button 
-                         onClick={() => onUpdateQuantity(item.id, 1)}
-                         className="w-8 h-8 flex items-center justify-center bg-white dark:bg-slate-700 rounded shadow-sm text-slate-600 dark:text-slate-200 hover:text-blue-600 dark:hover:text-blue-400 disabled:opacity-50"
-                         disabled={!item.selected}
-                    >
-                        +
-                    </button>
-                </div>
-            </div>
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 };

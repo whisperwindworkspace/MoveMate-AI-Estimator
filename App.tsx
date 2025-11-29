@@ -15,7 +15,8 @@ import CRMConfigModal from './components/CRMConfigModal';
 import AdminLogin from './components/AdminLogin';
 import AdminDashboard from './components/AdminDashboard';
 import SuperAdminDashboard from './components/SuperAdminDashboard';
-import { Box, Truck, Plus, LogOut, Lock, Loader2, AlertTriangle, Scale, FileText, Package, Ban, ArrowRight, ArrowLeft } from 'lucide-react';
+import DatabaseSetupModal from './components/DatabaseSetupModal';
+import { Box, Truck, Plus, LogOut, Lock, Loader2, AlertTriangle, Scale, FileText, Package, Ban, ArrowRight, ArrowLeft, Database, SearchX, ShieldAlert } from 'lucide-react';
 
 interface AppProps {
   initialSlug?: string;
@@ -27,6 +28,9 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   const [currentUserRole, setCurrentUserRole] = useState<UserRole>('GUEST');
   const [currentCompanyId, setCurrentCompanyId] = useState<string | null>(null);
   const [detectedCompanyId, setDetectedCompanyId] = useState<string | null>(null);
+
+  // Initialization State
+  const [isInitComplete, setIsInitComplete] = useState(false);
 
   // Limit Check
   const [isLimitReached, setIsLimitReached] = useState(false);
@@ -52,6 +56,10 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<InventoryItem | undefined>(undefined);
+  const [isDbModalOpen, setIsDbModalOpen] = useState(false);
+
+  // DEBUG: Company Switcher State
+  const [debugCompanies, setDebugCompanies] = useState<CompanyProfile[]>([]);
 
   // --- 1. Initialization (Deep Link + Auth) ---
   useEffect(() => {
@@ -59,17 +67,25 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
         const params = new URLSearchParams(window.location.search);
         const companyId = params.get('cid');
         
-        const hashSlug = window.location.hash.replace(/^#/, '');
+        // ROBUST SLUG PARSING:
+        // 1. Remove starting '#' 
+        // 2. Remove any leading slashes '/' that might appear after hash (e.g. #/my-company -> my-company)
+        const hashSlug = window.location.hash.replace(/^#/, '').replace(/^\/+/, '');
+        
         const companySlug = initialSlug || hashSlug || params.get('slug');
         
+        console.log("App Init - Parsed Slug:", companySlug, "Direct ID:", companyId);
+
         if (companyId) {
             setDetectedCompanyId(companyId);
             const profile = await dbService.getCompanyPublicProfile(companyId);
             if (profile) {
+                // STRICT LIMIT CHECK
                 if (profile.usageLimit !== null && profile.usageLimit !== undefined) {
                     if ((profile.usageCount || 0) >= profile.usageLimit) {
                         setIsLimitReached(true);
-                        return;
+                        setIsInitComplete(true);
+                        return; // Stop loading app
                     }
                 }
                 setSettings({
@@ -83,8 +99,10 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
         } else if (companySlug) {
             let profile = await dbService.getCompanyBySlug(companySlug);
             if (!profile) {
+                // Fallback to static config if DB fails or not found
                 const configProfile = getCompanyBySlug(companySlug);
                 if (configProfile) {
+                    console.log("Found static profile for:", companySlug);
                     setSettings({
                         companyName: configProfile.name,
                         adminEmail: configProfile.destinationEmail,
@@ -92,18 +110,25 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
                         primaryColor: configProfile.primaryColor,
                         logoUrl: configProfile.logoUrl
                     });
+                    // IMPORTANT: Static profiles have no ID, so we cannot log jobs to DB unless we create/find them.
+                    setIsInitComplete(true);
                     return;
                 }
             }
 
             if (profile) {
+                 console.log("Found DB profile:", profile.name, profile.id);
                  setDetectedCompanyId(profile.id);
+                 
+                 // STRICT LIMIT CHECK
                  if (profile.usageLimit !== null && profile.usageLimit !== undefined) {
                     if ((profile.usageCount || 0) >= profile.usageLimit) {
                         setIsLimitReached(true);
-                        return;
+                        setIsInitComplete(true);
+                        return; // Stop loading app
                     }
                 }
+
                 setSettings({
                     companyName: profile.name,
                     adminEmail: profile.adminEmail,
@@ -111,8 +136,12 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
                     primaryColor: profile.primaryColor,
                     logoUrl: profile.logoUrl
                 });
+            } else {
+                console.warn("No profile found for slug:", companySlug);
             }
         }
+        
+        setIsInitComplete(true);
     };
     initCompany();
 
@@ -128,6 +157,7 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
                     if (profile.role === 'SUPER_ADMIN' || (companyData && companyData.name === 'Super Admin')) {
                         setCurrentUserRole('SUPER_ADMIN');
                         setView('SUPER_ADMIN_DASHBOARD');
+                        setIsLimitReached(false); // Admins bypass limit screens
                     } else {
                         setCurrentUserRole('COMPANY_ADMIN');
                         setCurrentCompanyId(profile.company_id);
@@ -141,6 +171,7 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
                             });
                         }
                         setView('COMPANY_DASHBOARD');
+                        setIsLimitReached(false); // Dashboard access shouldn't be blocked by usage limit
                     }
                 }
             } catch (e) {
@@ -151,6 +182,8 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
                 setCurrentUserRole('GUEST');
                 setCurrentCompanyId(null);
                 setView('INVENTORY');
+                // Re-init company check in case we logged out to a blocked company page
+                initCompany();
             }
         }
     });
@@ -162,6 +195,8 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
 
   // --- 2. Initial Data Fetch ---
   useEffect(() => {
+    if (isLimitReached) return; // Don't fetch data if blocked
+
     const init = async () => {
         await dbService.checkConnection();
         
@@ -170,9 +205,17 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
         const fetchedItems = await dbService.getItems(activeId);
         setItems(fetchedItems);
         setIsLoadingItems(false);
+
+        // DEBUG: Fetch companies for testing switcher
+        try {
+            const comps = await dbService.getAllCompanies();
+            setDebugCompanies(comps);
+        } catch (e) {
+            console.error("Debug fetch failed", e);
+        }
     };
     init();
-  }, [sessionId, jobDetails.jobId]);
+  }, [sessionId, jobDetails.jobId, isLimitReached]);
 
   // --- Handlers ---
 
@@ -190,9 +233,9 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
          savedItems.push(saved);
       }
       setItems(prev => [...prev, ...savedItems]);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError("Failed to analyze image. Please try again.");
+      setError("Failed to analyze image. " + (err.message || ''));
     } finally {
       setIsAnalyzing(false);
     }
@@ -247,7 +290,7 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
       const profile = await getUserProfile(user.id);
       if (!profile) { await signOut(); return false; }
       return true;
-  };
+    }
 
   const handleRequestPasswordReset = async (e: string) => { return { success: true, code: '123456' }; };
   const handleCompletePasswordReset = async () => {};
@@ -285,8 +328,8 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
         const item = currentItems.find(i => i.id === id);
         if (item) {
             const updated = { ...item, selected: !item.selected };
-            // Fire and forget db update, or handle error if critical
-            dbService.upsertItem(updated, activeJobId).catch(console.error);
+            // Stringify error to avoid [object Object]
+            dbService.upsertItem(updated, activeJobId).catch(e => console.error("Toggle update failed:", JSON.stringify(e, null, 2)));
             return currentItems.map(i => i.id === id ? updated : i);
         }
         return currentItems;
@@ -296,8 +339,8 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   const handleSelectAll = async (select: boolean) => {
       setItems(current => {
           const updated = current.map(i => ({ ...i, selected: select }));
-          // Bulk update would be better in DB but loop for now
-          updated.forEach(i => dbService.upsertItem(i, activeJobId));
+          // Bulk update
+          updated.forEach(i => dbService.upsertItem(i, activeJobId).catch(e => console.error("SelectAll update failed:", JSON.stringify(e, null, 2))));
           return updated;
       });
   };
@@ -307,7 +350,7 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
         const item = current.find(i => i.id === id);
         if (item) {
             const updated = { ...item, quantity: Math.max(1, item.quantity + d) };
-            dbService.upsertItem(updated, activeJobId).catch(console.error);
+            dbService.upsertItem(updated, activeJobId).catch(e => console.error("Quantity update failed:", JSON.stringify(e, null, 2)));
             return current.map(i => i.id === id ? updated : i);
         }
         return current;
@@ -323,11 +366,11 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
       if (editingItem) {
           const updated = { ...editingItem, ...data } as InventoryItem;
           setItems(current => current.map(i => i.id === editingItem.id ? updated : i));
-          await dbService.upsertItem(updated, activeJobId);
+          await dbService.upsertItem(updated, activeJobId).catch(e => console.error("Save item failed:", JSON.stringify(e, null, 2)));
       } else {
           const newItem = { ...data, id: crypto.randomUUID(), selected: true } as InventoryItem;
           setItems(current => [...current, newItem]);
-          await dbService.upsertItem(newItem, activeJobId);
+          await dbService.upsertItem(newItem, activeJobId).catch(e => console.error("Create item failed:", JSON.stringify(e, null, 2)));
       }
       setIsModalOpen(false);
   };
@@ -338,14 +381,89 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   const otherCount = activeItems.filter(i => i.category !== 'Box').reduce((acc, i) => acc + i.quantity, 0);
 
   // Render Logic
+
+  if (!isInitComplete) {
+      return (
+          <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
+              <Loader2 className="animate-spin text-blue-600" size={32} />
+          </div>
+      )
+  }
+  
+  // STRICT LIMIT ENFORCEMENT - 404 SCREEN
   if (isLimitReached) {
       return (
-          <div className="min-h-screen bg-slate-100 dark:bg-slate-900 flex flex-col items-center justify-center p-6 text-center">
-              <div className="bg-white dark:bg-slate-800 p-8 rounded-2xl shadow-xl max-w-md w-full border border-slate-200 dark:border-slate-700">
-                  <Ban size={40} className="text-red-500 mx-auto mb-4" />
-                  <h1 className="text-2xl font-bold dark:text-white mb-2">Limit Reached</h1>
-                  <p className="text-slate-500 dark:text-slate-400">Please contact administrator.</p>
+          <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
+              <div className="max-w-md w-full space-y-6 animate-in fade-in zoom-in duration-300">
+                  <div className="relative">
+                      <div className="absolute inset-0 bg-red-100 dark:bg-red-900/20 rounded-full blur-2xl"></div>
+                      <h1 className="relative text-8xl font-black text-slate-200 dark:text-slate-800 tracking-tighter">404</h1>
+                  </div>
+                  
+                  <div className="space-y-4 relative z-10">
+                      <div className="mx-auto w-16 h-16 bg-red-100 dark:bg-red-900/30 text-red-500 rounded-full flex items-center justify-center">
+                        <SearchX size={32} />
+                      </div>
+                      
+                      <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100">
+                          Service Unavailable
+                      </h2>
+                      
+                      <p className="text-slate-500 dark:text-slate-400">
+                          This inventory session link is no longer active or the usage limit has been reached.
+                      </p>
+
+                      <div className="pt-4 text-sm font-medium text-slate-600 dark:text-slate-300">
+                         Contact Super Admin for assistance.
+                      </div>
+                  </div>
+                  
+                  {/* Discreet Admin Login for Owner */}
+                  <div className="absolute bottom-6 right-6">
+                      <button onClick={() => setView('LOGIN')} className="text-slate-300 hover:text-slate-500">
+                          <Lock size={16} />
+                      </button>
+                  </div>
               </div>
+          </div>
+      );
+  }
+
+  // STRICT UNAUTHORIZED ACCESS CHECK
+  // If we are GUEST, Init is Complete, and NO Company ID was detected -> BLOCK
+  if (currentUserRole === 'GUEST' && !detectedCompanyId && view !== 'LOGIN') {
+      return (
+          <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
+               <div className="max-w-md w-full space-y-6 animate-in fade-in zoom-in duration-300">
+                    <div className="mx-auto w-20 h-20 bg-red-100 dark:bg-red-900/30 text-red-600 rounded-full flex items-center justify-center mb-6">
+                        <ShieldAlert size={40} />
+                    </div>
+
+                    <h1 className="text-3xl font-bold text-slate-800 dark:text-slate-100">
+                        Unauthorized Access
+                    </h1>
+                    
+                    <p className="text-slate-600 dark:text-slate-400 text-lg">
+                        You are attempting to access this application from an invalid source.
+                    </p>
+                    
+                    <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                        <p className="text-slate-500 dark:text-slate-400 text-sm">
+                            Please use the <strong>specific intake link</strong> provided by your moving company.
+                        </p>
+                    </div>
+
+                    <div className="pt-8 text-sm text-slate-400">
+                        Contact Super Admin for assistance.
+                    </div>
+               </div>
+
+               {/* Discreet Admin Login for Owner to bypass */}
+               <div className="fixed bottom-6 right-6">
+                    <button onClick={() => setView('LOGIN')} className="text-slate-300 hover:text-slate-500 transition-colors">
+                        <Lock size={18} />
+                    </button>
+               </div>
           </div>
       );
   }
@@ -394,13 +512,19 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
           <div className="flex flex-col">
             <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
               <Truck style={{ color: settings.primaryColor }} size={24} /> {settings.companyName}
-              {dbService.isOffline() && <span className="text-[10px] bg-amber-100 text-amber-800 px-2 rounded">Demo</span>}
             </h1>
             <div className="text-xs text-slate-500 dark:text-slate-400 font-medium ml-8">
                 {jobDetails.jobId || (jobDetails.customerName ? `${jobDetails.customerName}` : "New Inventory")}
             </div>
           </div>
           <div className="flex gap-2">
+             {/* Database Setup - SECURED: Only visible to SUPER ADMIN */}
+            {currentUserRole === 'SUPER_ADMIN' && (
+              <button onClick={() => setIsDbModalOpen(true)} className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 px-3 py-1.5 rounded-lg text-sm font-medium transition" title="Database Setup">
+                <Database size={16} />
+              </button>
+            )}
+
             <button onClick={() => { setEditingItem(undefined); setIsModalOpen(true); }} className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-lg text-sm font-medium transition">
                 <Plus size={16} /> Add Item
             </button>
@@ -412,6 +536,49 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
       </header>
 
       <main className="max-w-2xl mx-auto px-4 py-6">
+        {/* DEBUG: Company Switcher */}
+        {debugCompanies.length > 0 && (
+            <div className="mb-4 p-2 bg-yellow-50 border border-yellow-200 rounded-lg text-xs text-yellow-800">
+                <label className="font-bold block mb-1">🚧 Debug: Switch Company (Test Mode)</label>
+                <select 
+                    className="w-full p-1 border rounded bg-white text-slate-800" 
+                    value={detectedCompanyId || ''} 
+                    onChange={(e) => {
+                        const c = debugCompanies.find(x => x.id === e.target.value);
+                        if(c) {
+                            console.log("Debug Switcher: Activated company", c.name, c.id);
+                            // CRITICAL: Update URL hash so the app acts like a real deep link
+                            const newHash = c.slug || c.id;
+                            window.location.hash = newHash;
+                            
+                            setDetectedCompanyId(c.id);
+                            
+                            // Check Limit Immediately on Switch
+                            if (c.usageLimit !== null && c.usageLimit !== undefined && (c.usageCount||0) >= c.usageLimit) {
+                                setIsLimitReached(true);
+                                return;
+                            } else {
+                                setIsLimitReached(false);
+                            }
+
+                            setSettings({
+                                companyName: c.name,
+                                adminEmail: c.adminEmail,
+                                crmConfig: c.crmConfig || {provider:null, isConnected:false},
+                                primaryColor: c.primaryColor,
+                                logoUrl: c.logoUrl
+                            });
+                        }
+                    }}
+                >
+                    <option value="">-- Select Company to Simulate --</option>
+                    {debugCompanies.map(c => (
+                        <option key={c.id} value={c.id}>{c.name} (Usage: {c.usageCount}/{c.usageLimit ?? '∞'})</option>
+                    ))}
+                </select>
+            </div>
+        )}
+
         {items.length > 0 ? (
             <div className="mb-4 bg-slate-900 dark:bg-slate-800 text-white rounded-xl p-4 shadow-lg grid grid-cols-2 gap-2 animate-in slide-in-from-top-2">
                 <div className="flex flex-col items-center border-r border-slate-700">
@@ -474,6 +641,9 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
       )}
 
       <ItemFormModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onSave={handleSaveItem} initialData={editingItem} />
+      
+      {/* Database Setup Modal (Restricted) */}
+      {isDbModalOpen && <DatabaseSetupModal onClose={() => setIsDbModalOpen(false)} />}
     </div>
   );
 };
