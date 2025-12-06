@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+
+import React, { useEffect, useState, useRef } from 'react';
 import { InventoryItem, CRMConfig, JobDetails, PackingRequirements } from '../types';
 import { Send, Box, Package, CheckCircle } from 'lucide-react';
 import { dbService } from '../services/dbService';
@@ -12,6 +13,7 @@ interface SummaryPanelProps {
   companyName: string;
   onUpdateJobDetails: (details: JobDetails) => void;
   companyId?: string | null;
+  sessionId: string;
 }
 
 const EMPTY_PACKING: PackingRequirements = {
@@ -30,6 +32,7 @@ const SummaryPanel: React.FC<SummaryPanelProps> = ({
   companyName,
   onUpdateJobDetails,
   companyId,
+  sessionId,
 }) => {
   const [localJobDetails, setLocalJobDetails] = useState<JobDetails>(jobDetails);
   const [packing, setPacking] = useState<PackingRequirements>(
@@ -38,6 +41,10 @@ const SummaryPanel: React.FC<SummaryPanelProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  
+  // Lock refs
+  const submittingRef = useRef(false);
+  const lastSubmittedJobIdRef = useRef<string | null>(null);
 
   // Keep local state in sync if parent updates jobDetails
   useEffect(() => {
@@ -71,7 +78,11 @@ const SummaryPanel: React.FC<SummaryPanelProps> = ({
     });
   };
 
-  const handleSubmitInventory = async () => {
+  const handleSubmitInventory = async (e?: React.MouseEvent) => {
+    // Prevent double invocation if button is clicked quickly or strict mode effects
+    if (e) e.preventDefault();
+    if (submittingRef.current) return;
+
     // 1. Validate Items
     if (selectedItems.length === 0) {
       setStatusMessage('Please select at least one item before submitting.');
@@ -103,6 +114,22 @@ const SummaryPanel: React.FC<SummaryPanelProps> = ({
         }
     }
 
+    const normalizedDetails: JobDetails = {
+        ...localJobDetails,
+        packingRequirements: packing,
+    };
+
+    // Determine the final Job ID
+    const finalJobId = normalizedDetails.jobId || sessionId;
+
+    // Prevent duplicate submission for the exact same Job ID in this session
+    if (lastSubmittedJobIdRef.current === finalJobId) {
+        console.warn("Duplicate submission prevented for Job ID:", finalJobId);
+        setIsSubmitted(true); // Re-show success screen
+        return;
+    }
+
+    submittingRef.current = true;
     setIsSubmitting(true);
     setStatusMessage(null);
 
@@ -110,19 +137,16 @@ const SummaryPanel: React.FC<SummaryPanelProps> = ({
       const urlParams = new URLSearchParams(window.location.search);
       const cid = companyId || urlParams.get('cid');
 
-      const normalizedDetails: JobDetails = {
-        ...localJobDetails,
-        packingRequirements: packing,
-      };
-
       console.log('--- Submission Started ---');
       console.log('Detected Company ID:', cid);
+      console.log('Target Job ID:', finalJobId);
 
       // 1) Persist job row (usage, analytics) if we know the company
       if (cid) {
         try {
             console.log('Calling dbService.createJob...');
-            const newJob = await dbService.createJob({
+            await dbService.createJob({
+              id: finalJobId, // Use the consistent ID
               company_id: cid,
               customer_name: normalizedDetails.customerName || 'Unknown',
               customer_email: normalizedDetails.customerEmail || null,
@@ -137,7 +161,8 @@ const SummaryPanel: React.FC<SummaryPanelProps> = ({
               total_weight: totalWeight,
               item_count: selectedItems.length,
             });
-            console.log('Job created successfully in DB:', newJob);
+            // Mark as successfully submitted to prevent retries
+            lastSubmittedJobIdRef.current = finalJobId;
         } catch (dbError: any) {
             console.error("Database submission failed (Logging only, continuing to email)", JSON.stringify(dbError, null, 2));
             // We log but continue, so the user can still receive the email
@@ -206,6 +231,7 @@ ${itemLines.join('\n')}`;
       );
     } finally {
       setIsSubmitting(false);
+      submittingRef.current = false;
     }
   };
 
