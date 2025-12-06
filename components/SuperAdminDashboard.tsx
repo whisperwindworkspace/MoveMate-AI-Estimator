@@ -1,13 +1,11 @@
 
-
 import React, { useMemo, useState } from 'react';
 import { CompanyProfile } from '../types';
 import { dbService } from '../services/dbService';
 import { signUpWithEmail } from '../services/authService';
 import { COMPANIES } from '../config/companies';
 import { CompanyQrCard } from './CompanyQrCard';
-import DatabaseSetupModal from './DatabaseSetupModal';
-import { Shield, Plus, Trash2, LogOut, Building, User, Loader2, QrCode, X, Edit2, Check, Infinity, RefreshCw, Database } from 'lucide-react';
+import { Shield, Plus, Trash2, LogOut, Building, User, Loader2, QrCode, X, Edit2, Check, Infinity, RefreshCw } from 'lucide-react';
 
 interface SuperAdminDashboardProps {
   companies: CompanyProfile[];
@@ -42,7 +40,6 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
 
   const [qrModalOpen, setQrModalOpen] = useState(false);
   const [selectedQrCompany, setSelectedQrCompany] = useState<CompanyProfile | null>(null);
-  const [isDbModalOpen, setIsDbModalOpen] = useState(false);
   
   // Inline editing state for limits
   const [editingLimitId, setEditingLimitId] = useState<string | null>(null);
@@ -146,13 +143,6 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
           <Shield /> Super Admin Console
         </div>
         <div className="flex items-center gap-2">
-            <button
-                onClick={() => setIsDbModalOpen(true)}
-                className="text-slate-400 hover:text-blue-400 flex items-center gap-1 text-sm font-medium transition-colors mr-4"
-                title="Database Maintenance"
-            >
-                <Database size={16} /> DB Maintenance
-            </button>
             <button
                 onClick={handleRefresh}
                 className="text-slate-400 hover:text-white flex items-center gap-1 text-sm font-medium transition-colors mr-4"
@@ -424,9 +414,6 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
           </div>
         )}
       </main>
-
-      {/* Database Setup Modal */}
-      {isDbModalOpen && <DatabaseSetupModal onClose={() => setIsDbModalOpen(false)} />}
     </div>
   );
 };

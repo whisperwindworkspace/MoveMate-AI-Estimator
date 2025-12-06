@@ -15,8 +15,7 @@ import CRMConfigModal from './components/CRMConfigModal';
 import AdminLogin from './components/AdminLogin';
 import AdminDashboard from './components/AdminDashboard';
 import SuperAdminDashboard from './components/SuperAdminDashboard';
-import DatabaseSetupModal from './components/DatabaseSetupModal';
-import { Box, Truck, Plus, LogOut, Lock, Loader2, AlertTriangle, Scale, FileText, Package, Ban, ArrowRight, ArrowLeft, Database, SearchX, ShieldAlert } from 'lucide-react';
+import { Box, Truck, Plus, Lock, Loader2, Scale, FileText, Package, ArrowRight, ArrowLeft, ShieldAlert, SearchX } from 'lucide-react';
 
 interface AppProps {
   initialSlug?: string;
@@ -31,7 +30,7 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
 
   // Initialization State
   const [isInitComplete, setIsInitComplete] = useState(false);
-
+  
   // Limit Check
   const [isLimitReached, setIsLimitReached] = useState(false);
 
@@ -56,10 +55,6 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<InventoryItem | undefined>(undefined);
-  const [isDbModalOpen, setIsDbModalOpen] = useState(false);
-
-  // DEBUG: Company Switcher State
-  const [debugCompanies, setDebugCompanies] = useState<CompanyProfile[]>([]);
 
   // --- 1. Initialization (Deep Link + Auth) ---
   useEffect(() => {
@@ -75,6 +70,9 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
         const companySlug = initialSlug || hashSlug || params.get('slug');
         
         console.log("App Init - Parsed Slug:", companySlug, "Direct ID:", companyId);
+
+        // Reset states for re-init
+        setIsLimitReached(false);
 
         if (companyId) {
             setDetectedCompanyId(companyId);
@@ -205,14 +203,6 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
         const fetchedItems = await dbService.getItems(activeId);
         setItems(fetchedItems);
         setIsLoadingItems(false);
-
-        // DEBUG: Fetch companies for testing switcher
-        try {
-            const comps = await dbService.getAllCompanies();
-            setDebugCompanies(comps);
-        } catch (e) {
-            console.error("Debug fetch failed", e);
-        }
     };
     init();
   }, [sessionId, jobDetails.jobId, isLimitReached]);
@@ -261,7 +251,6 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
       }
   };
 
-  // Rest of handlers...
   const handleUpdateJobDetails = async (details: JobDetails) => {
     const oldId = jobDetails.jobId || sessionId;
     const newId = details.jobId || sessionId;
@@ -276,15 +265,7 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   };
 
   const handleLogin = async (u: string, p: string) => {
-      if (dbService.isOffline()) {
-          const c = await dbService.loginCompany(u, p);
-          if (c) {
-              if (c.name === 'Super Admin') { setCurrentUserRole('SUPER_ADMIN'); setView('SUPER_ADMIN_DASHBOARD'); }
-              else { setCurrentUserRole('COMPANY_ADMIN'); setCurrentCompanyId(c.id); setView('COMPANY_DASHBOARD'); }
-              return true;
-          }
-          return false;
-      }
+      // Offline mock removed for production
       const user = await signInWithEmail(u, p);
       if (!user) return false;
       const profile = await getUserProfile(user.id);
@@ -384,8 +365,8 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
 
   if (!isInitComplete) {
       return (
-          <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
-              <Loader2 className="animate-spin text-blue-600" size={32} />
+          <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center pt-10">
+                <Loader2 className="animate-spin text-blue-600" size={32} />
           </div>
       )
   }
@@ -393,39 +374,39 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   // STRICT LIMIT ENFORCEMENT - 404 SCREEN
   if (isLimitReached) {
       return (
-          <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
-              <div className="max-w-md w-full space-y-6 animate-in fade-in zoom-in duration-300">
-                  <div className="relative">
-                      <div className="absolute inset-0 bg-red-100 dark:bg-red-900/20 rounded-full blur-2xl"></div>
-                      <h1 className="relative text-8xl font-black text-slate-200 dark:text-slate-800 tracking-tighter">404</h1>
-                  </div>
-                  
-                  <div className="space-y-4 relative z-10">
-                      <div className="mx-auto w-16 h-16 bg-red-100 dark:bg-red-900/30 text-red-500 rounded-full flex items-center justify-center">
-                        <SearchX size={32} />
-                      </div>
-                      
-                      <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100">
-                          Service Unavailable
-                      </h2>
-                      
-                      <p className="text-slate-500 dark:text-slate-400">
-                          This inventory session link is no longer active or the usage limit has been reached.
-                      </p>
+          <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center pt-16">
+                <div className="max-w-md w-full space-y-6 animate-in fade-in zoom-in duration-300">
+                    <div className="relative">
+                        <div className="absolute inset-0 bg-red-100 dark:bg-red-900/20 rounded-full blur-2xl"></div>
+                        <h1 className="relative text-8xl font-black text-slate-200 dark:text-slate-800 tracking-tighter">404</h1>
+                    </div>
+                    
+                    <div className="space-y-4 relative z-10">
+                        <div className="mx-auto w-16 h-16 bg-red-100 dark:bg-red-900/30 text-red-500 rounded-full flex items-center justify-center">
+                            <SearchX size={32} />
+                        </div>
+                        
+                        <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100">
+                            Service Unavailable
+                        </h2>
+                        
+                        <p className="text-slate-500 dark:text-slate-400">
+                            This inventory session link is no longer active or the usage limit has been reached.
+                        </p>
 
-                      <div className="pt-4 text-sm font-medium text-slate-600 dark:text-slate-300">
-                         Contact Super Admin for assistance.
-                      </div>
-                  </div>
-                  
-                  {/* Discreet Admin Login for Owner */}
-                  <div className="absolute bottom-6 right-6">
-                      <button onClick={() => setView('LOGIN')} className="text-slate-300 hover:text-slate-500">
-                          <Lock size={16} />
-                      </button>
-                  </div>
-              </div>
-          </div>
+                        <div className="pt-4 text-sm font-medium text-slate-600 dark:text-slate-300">
+                            Contact Super Admin for assistance.
+                        </div>
+                    </div>
+                    
+                    {/* Discreet Admin Login for Owner */}
+                    <div className="absolute bottom-6 right-6">
+                        <button onClick={() => setView('LOGIN')} className="text-slate-300 hover:text-slate-500">
+                            <Lock size={16} />
+                        </button>
+                    </div>
+                </div>
+            </div>
       );
   }
 
@@ -433,38 +414,37 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   // If we are GUEST, Init is Complete, and NO Company ID was detected -> BLOCK
   if (currentUserRole === 'GUEST' && !detectedCompanyId && view !== 'LOGIN') {
       return (
-          <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
-               <div className="max-w-md w-full space-y-6 animate-in fade-in zoom-in duration-300">
-                    <div className="mx-auto w-20 h-20 bg-red-100 dark:bg-red-900/30 text-red-600 rounded-full flex items-center justify-center mb-6">
-                        <ShieldAlert size={40} />
-                    </div>
+          <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center pt-16">
+                <div className="max-w-md w-full space-y-6 animate-in fade-in zoom-in duration-300">
+                        <div className="mx-auto w-20 h-20 bg-red-100 dark:bg-red-900/30 text-red-600 rounded-full flex items-center justify-center mb-6">
+                            <ShieldAlert size={40} />
+                        </div>
 
-                    <h1 className="text-3xl font-bold text-slate-800 dark:text-slate-100">
-                        Unauthorized Access
-                    </h1>
-                    
-                    <p className="text-slate-600 dark:text-slate-400 text-lg">
-                        You are attempting to access this application from an invalid source.
-                    </p>
-                    
-                    <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
-                        <p className="text-slate-500 dark:text-slate-400 text-sm">
-                            Please use the <strong>specific intake link</strong> provided by your moving company.
+                        <h1 className="text-3xl font-bold text-slate-800 dark:text-slate-100">
+                            Unauthorized Access
+                        </h1>
+                        
+                        <p className="text-slate-600 dark:text-slate-400 text-lg">
+                            You are attempting to access this application from an invalid source.
                         </p>
-                    </div>
+                        
+                        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                            <p className="text-slate-500 dark:text-slate-400 text-sm">
+                                Please use the <strong>specific intake link</strong> provided by your moving company.
+                            </p>
+                        </div>
 
-                    <div className="pt-8 text-sm text-slate-400">
-                        Contact Super Admin for assistance.
-                    </div>
-               </div>
-
-               {/* Discreet Admin Login for Owner to bypass */}
-               <div className="fixed bottom-6 right-6">
-                    <button onClick={() => setView('LOGIN')} className="text-slate-300 hover:text-slate-500 transition-colors">
-                        <Lock size={18} />
-                    </button>
-               </div>
-          </div>
+                        <div className="pt-8 border-t border-slate-200 dark:border-slate-800 w-full">
+                            <button
+                                onClick={() => setView('LOGIN')}
+                                className="w-full py-3 bg-slate-900 text-white dark:bg-slate-800 rounded-xl font-bold hover:bg-slate-800 dark:hover:bg-slate-700 transition-colors flex items-center justify-center gap-2"
+                            >
+                                <Lock size={18} />
+                                Super Admin Login
+                            </button>
+                        </div>
+                </div>
+            </div>
       );
   }
 
@@ -474,9 +454,18 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
       const [l, sL] = useState<CompanyProfile[]>([]);
       useEffect(() => { dbService.getAllCompanies().then(sL); }, []);
       const refresh = () => dbService.getAllCompanies().then(sL);
-      return <SuperAdminDashboard companies={l} onAddCompany={refresh} onDeleteCompany={async (id) => { await handleDeleteCompany(id); refresh(); }} onUpdateCompany={refresh} onRefresh={refresh} onLogout={handleLogout} />;
+      return <SuperAdminWrapper companies={l} onAddCompany={refresh} onDeleteCompany={async (id) => { await handleDeleteCompany(id); refresh(); }} onUpdateCompany={refresh} onRefresh={refresh} onLogout={handleLogout} />;
   };
-  if (view === 'SUPER_ADMIN_DASHBOARD') return <SuperAdminWrapper />;
+  if (view === 'SUPER_ADMIN_DASHBOARD') {
+      const Wrapper = () => {
+        const [l, sL] = useState<CompanyProfile[]>([]);
+        useEffect(() => { dbService.getAllCompanies().then(sL); }, []);
+        const refresh = () => dbService.getAllCompanies().then(sL);
+        return <SuperAdminDashboard companies={l} onAddCompany={refresh} onDeleteCompany={async (id) => { await handleDeleteCompany(id); refresh(); }} onUpdateCompany={refresh} onRefresh={refresh} onLogout={handleLogout} />;
+    };
+    return <Wrapper />;
+  }
+
   if (view === 'COMPANY_DASHBOARD') return <AdminDashboard settings={settings} onUpdateSettings={handleUpdateSettings} onLogout={handleLogout} />;
   
   if (view === 'SUMMARY') {
@@ -506,7 +495,8 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 pb-32 transition-colors duration-300">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 pb-32 transition-colors duration-300 pt-8">
+      
       <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-40 transition-colors">
         <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex flex-col">
@@ -518,66 +508,15 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
             </div>
           </div>
           <div className="flex gap-2">
-             {/* Database Setup - SECURED: Only visible to SUPER ADMIN */}
-            {currentUserRole === 'SUPER_ADMIN' && (
-              <button onClick={() => setIsDbModalOpen(true)} className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 px-3 py-1.5 rounded-lg text-sm font-medium transition" title="Database Setup">
-                <Database size={16} />
-              </button>
-            )}
-
             <button onClick={() => { setEditingItem(undefined); setIsModalOpen(true); }} className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-lg text-sm font-medium transition">
                 <Plus size={16} /> Add Item
             </button>
-            <button onClick={() => setView('LOGIN')} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition">
-                <Lock size={20} />
-            </button>
+            {/* Login button removed from header as requested */}
           </div>
         </div>
       </header>
 
       <main className="max-w-2xl mx-auto px-4 py-6">
-        {/* DEBUG: Company Switcher */}
-        {debugCompanies.length > 0 && (
-            <div className="mb-4 p-2 bg-yellow-50 border border-yellow-200 rounded-lg text-xs text-yellow-800">
-                <label className="font-bold block mb-1">🚧 Debug: Switch Company (Test Mode)</label>
-                <select 
-                    className="w-full p-1 border rounded bg-white text-slate-800" 
-                    value={detectedCompanyId || ''} 
-                    onChange={(e) => {
-                        const c = debugCompanies.find(x => x.id === e.target.value);
-                        if(c) {
-                            console.log("Debug Switcher: Activated company", c.name, c.id);
-                            // CRITICAL: Update URL hash so the app acts like a real deep link
-                            const newHash = c.slug || c.id;
-                            window.location.hash = newHash;
-                            
-                            setDetectedCompanyId(c.id);
-                            
-                            // Check Limit Immediately on Switch
-                            if (c.usageLimit !== null && c.usageLimit !== undefined && (c.usageCount||0) >= c.usageLimit) {
-                                setIsLimitReached(true);
-                                return;
-                            } else {
-                                setIsLimitReached(false);
-                            }
-
-                            setSettings({
-                                companyName: c.name,
-                                adminEmail: c.adminEmail,
-                                crmConfig: c.crmConfig || {provider:null, isConnected:false},
-                                primaryColor: c.primaryColor,
-                                logoUrl: c.logoUrl
-                            });
-                        }
-                    }}
-                >
-                    <option value="">-- Select Company to Simulate --</option>
-                    {debugCompanies.map(c => (
-                        <option key={c.id} value={c.id}>{c.name} (Usage: {c.usageCount}/{c.usageLimit ?? '∞'})</option>
-                    ))}
-                </select>
-            </div>
-        )}
 
         {items.length > 0 ? (
             <div className="mb-4 bg-slate-900 dark:bg-slate-800 text-white rounded-xl p-4 shadow-lg grid grid-cols-2 gap-2 animate-in slide-in-from-top-2">
@@ -641,9 +580,6 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
       )}
 
       <ItemFormModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onSave={handleSaveItem} initialData={editingItem} />
-      
-      {/* Database Setup Modal (Restricted) */}
-      {isDbModalOpen && <DatabaseSetupModal onClose={() => setIsDbModalOpen(false)} />}
     </div>
   );
 };
