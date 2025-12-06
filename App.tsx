@@ -1,11 +1,7 @@
 
-import React, { useState, useEffect } from 'react';
-import { InventoryItem, AppSettings, JobDetails, ViewMode, CompanyProfile, UserRole } from './types';
-import { DEFAULT_ADMIN_EMAIL } from './constants';
-import { analyzeImageForInventory, parseVoiceCommand, analyzeVideoFrames } from './services/geminiService';
+import React, { useState } from 'react';
+import { InventoryItem, ViewMode, CompanyProfile } from './types';
 import { dbService } from './services/dbService';
-import { signInWithEmail, getUserProfile, signOut, subscribeToAuthChanges } from './services/authService';
-import { getCompanyBySlug } from './config/companies';
 import CameraInput from './components/CameraInput';
 import VoiceInput from './components/VoiceInput';
 import InventoryList from './components/InventoryList';
@@ -15,7 +11,12 @@ import CRMConfigModal from './components/CRMConfigModal';
 import AdminLogin from './components/AdminLogin';
 import AdminDashboard from './components/AdminDashboard';
 import SuperAdminDashboard from './components/SuperAdminDashboard';
-import { Box, Truck, Plus, Lock, Loader2, Scale, FileText, Package, ArrowRight, ArrowLeft, ShieldAlert, SearchX } from 'lucide-react';
+import { Box, Truck, Plus, Lock, Loader2, FileText, Package, ArrowRight, ArrowLeft, ShieldAlert, SearchX } from 'lucide-react';
+
+// Hooks
+import { useCompanyInit } from './hooks/useCompanyInit';
+import { useAuth } from './hooks/useAuth';
+import { useInventory } from './hooks/useInventory';
 
 interface AppProps {
   initialSlug?: string;
@@ -24,344 +25,54 @@ interface AppProps {
 const App: React.FC<AppProps> = ({ initialSlug }) => {
   // Navigation State
   const [view, setView] = useState<ViewMode>('INVENTORY');
-  const [currentUserRole, setCurrentUserRole] = useState<UserRole>('GUEST');
-  const [currentCompanyId, setCurrentCompanyId] = useState<string | null>(null);
-  const [detectedCompanyId, setDetectedCompanyId] = useState<string | null>(null);
-
-  // Initialization State
-  const [isInitComplete, setIsInitComplete] = useState(false);
   
-  // Limit Check
-  const [isLimitReached, setIsLimitReached] = useState(false);
+  // Custom Hooks
+  const { 
+    isInitComplete, isLimitReached, detectedCompanyId, settings, 
+    setSettings, setIsLimitReached 
+  } = useCompanyInit(initialSlug);
 
-  // Job Data
+  const { 
+    currentUserRole, currentCompanyId, handleLogin, handleLogout 
+  } = useAuth(
+    view, 
+    setView, 
+    setSettings, 
+    setIsLimitReached, 
+    () => { /* Re-init logic handled by useEffect in hook implicitly */ }
+  );
+
   const [sessionId] = useState<string>(() => crypto.randomUUID());
-  const [jobDetails, setJobDetails] = useState<JobDetails>({});
   
-  // Current Settings
-  const [settings, setSettings] = useState<AppSettings>({
-    companyName: 'MoveMate AI',
-    adminEmail: DEFAULT_ADMIN_EMAIL,
-    crmConfig: { provider: null, isConnected: false, apiKey: '' },
-    primaryColor: '#2563eb'
-  });
-
-  // Data Loading
-  const [items, setItems] = useState<InventoryItem[]>([]);
-  const [isLoadingItems, setIsLoadingItems] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    items, setItems, isAnalyzing, error, 
+    jobDetails, handleUpdateJobDetails,
+    handleImageCaptured, handleVideoCaptured, handleVoiceResult,
+    handleToggleSelect, handleSelectAll, handleUpdateQuantity, 
+    handleDeleteItem, handleSaveItem
+  } = useInventory(sessionId, isLimitReached);
   
-  // Modal State
+  // UI State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<InventoryItem | undefined>(undefined);
 
-  // --- 1. Initialization (Deep Link + Auth) ---
-  useEffect(() => {
-    const initCompany = async () => {
-        const params = new URLSearchParams(window.location.search);
-        const companyId = params.get('cid');
-        
-        // ROBUST SLUG PARSING:
-        // 1. Remove starting '#' 
-        // 2. Remove any leading slashes '/' that might appear after hash (e.g. #/my-company -> my-company)
-        const hashSlug = window.location.hash.replace(/^#/, '').replace(/^\/+/, '');
-        
-        const companySlug = initialSlug || hashSlug || params.get('slug');
-        
-        console.log("App Init - Parsed Slug:", companySlug, "Direct ID:", companyId);
-
-        // Reset states for re-init
-        setIsLimitReached(false);
-
-        if (companyId) {
-            setDetectedCompanyId(companyId);
-            const profile = await dbService.getCompanyPublicProfile(companyId);
-            if (profile) {
-                // STRICT LIMIT CHECK
-                if (profile.usageLimit !== null && profile.usageLimit !== undefined) {
-                    if ((profile.usageCount || 0) >= profile.usageLimit) {
-                        setIsLimitReached(true);
-                        setIsInitComplete(true);
-                        return; // Stop loading app
-                    }
-                }
-                setSettings({
-                    companyName: profile.name,
-                    adminEmail: profile.adminEmail,
-                    crmConfig: profile.crmConfig,
-                    primaryColor: profile.primaryColor,
-                    logoUrl: profile.logoUrl
-                });
-            }
-        } else if (companySlug) {
-            let profile = await dbService.getCompanyBySlug(companySlug);
-            if (!profile) {
-                // Fallback to static config if DB fails or not found
-                const configProfile = getCompanyBySlug(companySlug);
-                if (configProfile) {
-                    console.log("Found static profile for:", companySlug);
-                    setSettings({
-                        companyName: configProfile.name,
-                        adminEmail: configProfile.destinationEmail,
-                        crmConfig: { provider: null, isConnected: false, apiKey: '' },
-                        primaryColor: configProfile.primaryColor,
-                        logoUrl: configProfile.logoUrl
-                    });
-                    // IMPORTANT: Static profiles have no ID, so we cannot log jobs to DB unless we create/find them.
-                    setIsInitComplete(true);
-                    return;
-                }
-            }
-
-            if (profile) {
-                 console.log("Found DB profile:", profile.name, profile.id);
-                 setDetectedCompanyId(profile.id);
-                 
-                 // STRICT LIMIT CHECK
-                 if (profile.usageLimit !== null && profile.usageLimit !== undefined) {
-                    if ((profile.usageCount || 0) >= profile.usageLimit) {
-                        setIsLimitReached(true);
-                        setIsInitComplete(true);
-                        return; // Stop loading app
-                    }
-                }
-
-                setSettings({
-                    companyName: profile.name,
-                    adminEmail: profile.adminEmail,
-                    crmConfig: profile.crmConfig,
-                    primaryColor: profile.primaryColor,
-                    logoUrl: profile.logoUrl
-                });
-            } else {
-                console.warn("No profile found for slug:", companySlug);
-            }
-        }
-        
-        setIsInitComplete(true);
-    };
-    initCompany();
-
-    if (dbService.isOffline()) return;
-
-    const subscription = subscribeToAuthChanges(async (session) => {
-        if (session?.user) {
-            try {
-                const profile = await getUserProfile(session.user.id);
-                if (profile) {
-                    const companyData = Array.isArray(profile.companies) ? profile.companies[0] : profile.companies;
-                    
-                    if (profile.role === 'SUPER_ADMIN' || (companyData && companyData.name === 'Super Admin')) {
-                        setCurrentUserRole('SUPER_ADMIN');
-                        setView('SUPER_ADMIN_DASHBOARD');
-                        setIsLimitReached(false); // Admins bypass limit screens
-                    } else {
-                        setCurrentUserRole('COMPANY_ADMIN');
-                        setCurrentCompanyId(profile.company_id);
-                        if (companyData) {
-                            setSettings({
-                                companyName: companyData.name,
-                                adminEmail: companyData.admin_email,
-                                crmConfig: companyData.crm_config || { provider: null, isConnected: false },
-                                primaryColor: companyData.primary_color,
-                                logoUrl: companyData.logo_url
-                            });
-                        }
-                        setView('COMPANY_DASHBOARD');
-                        setIsLimitReached(false); // Dashboard access shouldn't be blocked by usage limit
-                    }
-                }
-            } catch (e) {
-                console.error("Error restoring session profile", e);
-            }
-        } else {
-            if (view === 'COMPANY_DASHBOARD' || view === 'SUPER_ADMIN_DASHBOARD') {
-                setCurrentUserRole('GUEST');
-                setCurrentCompanyId(null);
-                setView('INVENTORY');
-                // Re-init company check in case we logged out to a blocked company page
-                initCompany();
-            }
-        }
-    });
-
-    return () => {
-        subscription.unsubscribe();
-    };
-  }, [view, initialSlug]);
-
-  // --- 2. Initial Data Fetch ---
-  useEffect(() => {
-    if (isLimitReached) return; // Don't fetch data if blocked
-
-    const init = async () => {
-        await dbService.checkConnection();
-        
-        setIsLoadingItems(true);
-        const activeId = jobDetails.jobId || sessionId;
-        const fetchedItems = await dbService.getItems(activeId);
-        setItems(fetchedItems);
-        setIsLoadingItems(false);
-    };
-    init();
-  }, [sessionId, jobDetails.jobId, isLimitReached]);
-
-  // --- Handlers ---
-
-  const activeJobId = jobDetails.jobId || sessionId;
-
-  const handleImageCaptured = async (base64: string) => {
-    setIsAnalyzing(true);
-    setError(null);
-    try {
-      const newItems = await analyzeImageForInventory(base64);
-      // Batch save to prevent multiple re-renders
-      const savedItems = [];
-      for (const item of newItems) {
-         const saved = await dbService.upsertItem(item, activeJobId);
-         savedItems.push(saved);
-      }
-      setItems(prev => [...prev, ...savedItems]);
-    } catch (err: any) {
-      console.error(err);
-      setError("Failed to analyze image. " + (err.message || ''));
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
-  const handleVideoCaptured = async (frames: string[]) => {
-      setIsAnalyzing(true);
-      setError(null);
-      try {
-          const newItems = await analyzeVideoFrames(frames);
-          // Batch save
-          const savedItems = [];
-          for (const item of newItems) {
-              const saved = await dbService.upsertItem(item, activeJobId);
-              savedItems.push(saved);
-          }
-          setItems(prev => [...prev, ...savedItems]);
-      } catch (err) {
-          console.error(err);
-          setError("Failed to analyze video. Please try again or use Photo mode.");
-      } finally {
-          setIsAnalyzing(false);
-      }
-  };
-
-  const handleUpdateJobDetails = async (details: JobDetails) => {
-    const oldId = jobDetails.jobId || sessionId;
-    const newId = details.jobId || sessionId;
-    setJobDetails(details);
-    if (details.jobId && details.jobId !== oldId) {
-       try {
-         await dbService.updateJobId(oldId, details.jobId);
-         const refreshed = await dbService.getItems(details.jobId);
-         setItems(refreshed);
-       } catch (e) { console.error(e); }
-    }
-  };
-
-  const handleLogin = async (u: string, p: string) => {
-      // Offline mock removed for production
-      const user = await signInWithEmail(u, p);
-      if (!user) return false;
-      const profile = await getUserProfile(user.id);
-      if (!profile) { await signOut(); return false; }
-      return true;
-    }
-
-  const handleRequestPasswordReset = async (e: string) => { return { success: true, code: '123456' }; };
-  const handleCompletePasswordReset = async () => {};
-  
-  const handleLogout = async () => {
-    if (!dbService.isOffline()) try { await signOut(); } catch {}
-    setCurrentUserRole('GUEST'); setCurrentCompanyId(null); setView('INVENTORY');
-  };
-
-  const handleAddCompany = async (c: CompanyProfile) => { try { await dbService.createCompany(c); } catch {} };
-  const handleDeleteCompany = async (id: string) => { await dbService.deleteCompany(id); };
-  const handleUpdateSettings = async (s: AppSettings) => {
+  // --- Handlers & Helpers ---
+  const handleUpdateSettings = async (s: any) => {
       setSettings(s);
       if (currentCompanyId) await dbService.updateCompanySettings(currentCompanyId, { adminEmail: s.adminEmail, crmConfig: s.crmConfig, primaryColor: s.primaryColor, logoUrl: s.logoUrl });
   };
-
-  const handleVoiceResult = async (transcript: string) => {
-    setIsAnalyzing(true);
-    setError(null);
-    try {
-        const newItems = await parseVoiceCommand(transcript);
-        // Batch save
-        const savedItems = [];
-        for (const item of newItems) {
-            const saved = await dbService.upsertItem(item, activeJobId);
-            savedItems.push(saved);
-        }
-        setItems(p => [...p, ...savedItems]);
-    } catch (err) { console.error(err); setError("Voice command failed."); } 
-    finally { setIsAnalyzing(false); }
-  };
-
-  const handleToggleSelect = async (id: string) => {
-    setItems(currentItems => {
-        const item = currentItems.find(i => i.id === id);
-        if (item) {
-            const updated = { ...item, selected: !item.selected };
-            // Stringify error to avoid [object Object]
-            dbService.upsertItem(updated, activeJobId).catch(e => console.error("Toggle update failed:", JSON.stringify(e, null, 2)));
-            return currentItems.map(i => i.id === id ? updated : i);
-        }
-        return currentItems;
-    });
-  };
-
-  const handleSelectAll = async (select: boolean) => {
-      setItems(current => {
-          const updated = current.map(i => ({ ...i, selected: select }));
-          // Bulk update
-          updated.forEach(i => dbService.upsertItem(i, activeJobId).catch(e => console.error("SelectAll update failed:", JSON.stringify(e, null, 2))));
-          return updated;
-      });
-  };
-
-  const handleUpdateQuantity = async (id: string, d: number) => {
-    setItems(current => {
-        const item = current.find(i => i.id === id);
-        if (item) {
-            const updated = { ...item, quantity: Math.max(1, item.quantity + d) };
-            dbService.upsertItem(updated, activeJobId).catch(e => console.error("Quantity update failed:", JSON.stringify(e, null, 2)));
-            return current.map(i => i.id === id ? updated : i);
-        }
-        return current;
-    });
-  };
-
-  const handleDeleteItem = async (id: string) => {
-    setItems(current => current.filter(i => i.id !== id));
-    await dbService.deleteItem(id);
-  };
-
-  const handleSaveItem = async (data: Partial<InventoryItem>) => {
-      if (editingItem) {
-          const updated = { ...editingItem, ...data } as InventoryItem;
-          setItems(current => current.map(i => i.id === editingItem.id ? updated : i));
-          await dbService.upsertItem(updated, activeJobId).catch(e => console.error("Save item failed:", JSON.stringify(e, null, 2)));
-      } else {
-          const newItem = { ...data, id: crypto.randomUUID(), selected: true } as InventoryItem;
-          setItems(current => [...current, newItem]);
-          await dbService.upsertItem(newItem, activeJobId).catch(e => console.error("Create item failed:", JSON.stringify(e, null, 2)));
-      }
-      setIsModalOpen(false);
-  };
+  const handleAddCompany = async (c: CompanyProfile) => { try { await dbService.createCompany(c); } catch {} };
+  const handleDeleteCompany = async (id: string) => { await dbService.deleteCompany(id); };
+  
+  const handlePasswordReset = async () => ({ success: true, code: '123456' });
+  const handleCompleteReset = async () => {};
 
   // Stats
   const activeItems = items.filter(i => i.selected);
   const boxCount = activeItems.filter(i => i.category === 'Box').reduce((acc, i) => acc + i.quantity, 0);
   const otherCount = activeItems.filter(i => i.category !== 'Box').reduce((acc, i) => acc + i.quantity, 0);
 
-  // Render Logic
+  // --- Render Views ---
 
   if (!isInitComplete) {
       return (
@@ -372,9 +83,9 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   }
   
   // STRICT LIMIT ENFORCEMENT - 404 SCREEN
-  if (isLimitReached) {
+  if (isLimitReached && currentUserRole !== 'SUPER_ADMIN') {
       return (
-          <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center pt-16">
+          <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center pt-16 relative">
                 <div className="max-w-md w-full space-y-6 animate-in fade-in zoom-in duration-300">
                     <div className="relative">
                         <div className="absolute inset-0 bg-red-100 dark:bg-red-900/20 rounded-full blur-2xl"></div>
@@ -393,16 +104,12 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
                         <p className="text-slate-500 dark:text-slate-400">
                             This inventory session link is no longer active or the usage limit has been reached.
                         </p>
-
-                        <div className="pt-4 text-sm font-medium text-slate-600 dark:text-slate-300">
-                            Contact Super Admin for assistance.
-                        </div>
                     </div>
                     
                     {/* Discreet Admin Login for Owner */}
-                    <div className="absolute bottom-6 right-6">
-                        <button onClick={() => setView('LOGIN')} className="text-slate-300 hover:text-slate-500">
-                            <Lock size={16} />
+                    <div className="absolute bottom-6 right-6 opacity-20 hover:opacity-100 transition-opacity">
+                        <button onClick={() => setView('LOGIN')} className="text-slate-400 p-2">
+                            <Lock size={14} />
                         </button>
                     </div>
                 </div>
@@ -411,10 +118,9 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
   }
 
   // STRICT UNAUTHORIZED ACCESS CHECK
-  // If we are GUEST, Init is Complete, and NO Company ID was detected -> BLOCK
   if (currentUserRole === 'GUEST' && !detectedCompanyId && view !== 'LOGIN') {
       return (
-          <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center pt-16">
+          <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center pt-16 relative">
                 <div className="max-w-md w-full space-y-6 animate-in fade-in zoom-in duration-300">
                         <div className="mx-auto w-20 h-20 bg-red-100 dark:bg-red-900/30 text-red-600 rounded-full flex items-center justify-center mb-6">
                             <ShieldAlert size={40} />
@@ -434,13 +140,14 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
                             </p>
                         </div>
 
-                        <div className="pt-8 border-t border-slate-200 dark:border-slate-800 w-full">
-                            <button
+                        {/* DISCREET ADMIN LOGIN */}
+                        <div className="absolute bottom-8 right-8">
+                             <button
                                 onClick={() => setView('LOGIN')}
-                                className="w-full py-3 bg-slate-900 text-white dark:bg-slate-800 rounded-xl font-bold hover:bg-slate-800 dark:hover:bg-slate-700 transition-colors flex items-center justify-center gap-2"
+                                className="text-slate-300 dark:text-slate-700 hover:text-slate-500 dark:hover:text-slate-500 transition-colors p-2"
+                                title="Admin Login"
                             >
-                                <Lock size={18} />
-                                Super Admin Login
+                                <Lock size={16} />
                             </button>
                         </div>
                 </div>
@@ -448,25 +155,19 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
       );
   }
 
-  if (view === 'LOGIN') return <AdminLogin onLogin={handleLogin} onRequestReset={handleRequestPasswordReset} onResetPassword={handleCompletePasswordReset} onBack={() => setView('INVENTORY')} />;
+  if (view === 'LOGIN') return <AdminLogin onLogin={handleLogin} onRequestReset={handlePasswordReset} onResetPassword={handleCompleteReset} onBack={() => setView('INVENTORY')} />;
   
-  const SuperAdminWrapper = () => {
-      const [l, sL] = useState<CompanyProfile[]>([]);
-      useEffect(() => { dbService.getAllCompanies().then(sL); }, []);
-      const refresh = () => dbService.getAllCompanies().then(sL);
-      return <SuperAdminWrapper companies={l} onAddCompany={refresh} onDeleteCompany={async (id) => { await handleDeleteCompany(id); refresh(); }} onUpdateCompany={refresh} onRefresh={refresh} onLogout={handleLogout} />;
-  };
   if (view === 'SUPER_ADMIN_DASHBOARD') {
-      const Wrapper = () => {
+     const Wrapper = () => {
         const [l, sL] = useState<CompanyProfile[]>([]);
-        useEffect(() => { dbService.getAllCompanies().then(sL); }, []);
+        React.useEffect(() => { dbService.getAllCompanies().then(sL); }, []);
         const refresh = () => dbService.getAllCompanies().then(sL);
-        return <SuperAdminDashboard companies={l} onAddCompany={refresh} onDeleteCompany={async (id) => { await handleDeleteCompany(id); refresh(); }} onUpdateCompany={refresh} onRefresh={refresh} onLogout={handleLogout} />;
+        return <SuperAdminDashboard companies={l} onAddCompany={refresh} onDeleteCompany={async (id) => { await handleDeleteCompany(id); refresh(); }} onUpdateCompany={refresh} onRefresh={refresh} onLogout={() => handleLogout(setView)} />;
     };
     return <Wrapper />;
   }
 
-  if (view === 'COMPANY_DASHBOARD') return <AdminDashboard settings={settings} onUpdateSettings={handleUpdateSettings} onLogout={handleLogout} />;
+  if (view === 'COMPANY_DASHBOARD') return <AdminDashboard settings={settings} onUpdateSettings={handleUpdateSettings} onLogout={() => handleLogout(setView)} />;
   
   if (view === 'SUMMARY') {
     return (
@@ -511,7 +212,6 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
             <button onClick={() => { setEditingItem(undefined); setIsModalOpen(true); }} className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-lg text-sm font-medium transition">
                 <Plus size={16} /> Add Item
             </button>
-            {/* Login button removed from header as requested */}
           </div>
         </div>
       </header>
@@ -579,7 +279,12 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
         </div>
       )}
 
-      <ItemFormModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onSave={handleSaveItem} initialData={editingItem} />
+      <ItemFormModal 
+        isOpen={isModalOpen} 
+        onClose={() => setIsModalOpen(false)} 
+        onSave={(data) => handleSaveItem(data, editingItem?.id)} 
+        initialData={editingItem} 
+      />
     </div>
   );
 };
