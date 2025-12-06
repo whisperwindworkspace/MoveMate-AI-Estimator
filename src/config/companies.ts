@@ -1,3 +1,4 @@
+
 export type PublicCompanyConfig = {
   slug: string;            // used in URL, e.g. /danmoving
   name: string;            // display name

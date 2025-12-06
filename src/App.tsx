@@ -57,6 +57,7 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
       setSettings(s);
       if (currentCompanyId) await dbService.updateCompanySettings(currentCompanyId, { adminEmail: s.adminEmail, crmConfig: s.crmConfig, primaryColor: s.primaryColor, logoUrl: s.logoUrl });
   };
+  const handleAddCompany = async (c: CompanyProfile) => { try { await dbService.createCompany(c); } catch {} };
   const handleDeleteCompany = async (id: string) => { await dbService.deleteCompany(id); };
   
   const handlePasswordReset = async () => ({ success: true, code: '123456' });
@@ -185,35 +186,34 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
     )
   }
 
-  // Inventory View using refactored component
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 pb-32 transition-colors duration-300 pt-8">
-      <InventoryView
-        settings={settings}
-        jobDetails={jobDetails}
-        items={items}
-        setItems={setItems}
-        isAnalyzing={isAnalyzing}
-        error={error}
-        onImageCaptured={handleImageCaptured}
-        onVideoCaptured={handleVideoCaptured}
-        onVoiceResult={handleVoiceResult}
-        onToggleSelect={handleToggleSelect}
-        onSelectAll={handleSelectAll}
-        onUpdateQuantity={handleUpdateQuantity}
-        onDeleteItem={handleDeleteItem}
-        onEditItem={(i) => { setEditingItem(i); setIsModalOpen(true); }}
-        onAddItem={() => { setEditingItem(undefined); setIsModalOpen(true); }}
-        onReview={() => setView('SUMMARY')}
-      />
-
-      <ItemFormModal 
-        isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
-        onSave={(data) => handleSaveItem(data, editingItem?.id)} 
-        initialData={editingItem} 
-      />
-    </div>
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 pb-32 transition-colors duration-300 pt-8">
+        <InventoryView 
+            settings={settings}
+            jobDetails={jobDetails}
+            items={items}
+            setItems={setItems}
+            isAnalyzing={isAnalyzing}
+            error={error}
+            onImageCaptured={handleImageCaptured}
+            onVideoCaptured={handleVideoCaptured}
+            onVoiceResult={handleVoiceResult}
+            onToggleSelect={handleToggleSelect}
+            onSelectAll={handleSelectAll}
+            onUpdateQuantity={handleUpdateQuantity}
+            onDeleteItem={handleDeleteItem}
+            onEditItem={(i) => { setEditingItem(i); setIsModalOpen(true); }}
+            onAddItem={() => { setEditingItem(undefined); setIsModalOpen(true); }}
+            onReview={() => setView('SUMMARY')}
+        />
+        
+        <ItemFormModal 
+            isOpen={isModalOpen} 
+            onClose={() => setIsModalOpen(false)} 
+            onSave={(data) => handleSaveItem(data, editingItem?.id)} 
+            initialData={editingItem} 
+        />
+      </div>
   );
 };
 
