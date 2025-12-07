@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { InventoryItem, ViewMode, CompanyProfile } from './types';
 import { dbService } from './services/dbService';
@@ -188,7 +189,6 @@ const App: React.FC<AppProps> = ({ initialSlug }) => {
                     companyName={settings.companyName} 
                     onUpdateJobDetails={handleUpdateJobDetails} 
                     companyId={currentCompanyId || detectedCompanyId}
-                    sessionId={sessionId}
                 />
              </main>
         </div>

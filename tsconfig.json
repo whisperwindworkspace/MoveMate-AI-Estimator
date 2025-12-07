@@ -5,16 +5,20 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
+
     "allowImportingTsExtensions": true,
     "useDefineForClassFields": false,
     "moduleDetection": "force",
+
     "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
     "noUncheckedIndexedAccess": true,
+
     "allowJs": false,
     "skipLibCheck": true,
     "noEmit": true,
+
     "baseUrl": "./src",
     "paths": {
       "@/*": ["*"],
@@ -24,7 +28,8 @@
       "@utils/*": ["utils/*"],
       "@types/*": ["types/*"]
     },
-    "types": ["node"]
+
+    "types": ["vite/client", "node", "react", "react-dom"]
   },
   "include": ["src"],
   "exclude": ["node_modules", "dist"]

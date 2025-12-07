@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { CRMConfig } from '../types';
 import { X, CheckCircle, Cloud, ArrowRight, Link2 } from 'lucide-react';

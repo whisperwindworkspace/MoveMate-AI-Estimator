@@ -1,3 +1,4 @@
+
 import { InventoryItem, CompanyProfile } from "./types";
 
 export const CATEGORIES = [

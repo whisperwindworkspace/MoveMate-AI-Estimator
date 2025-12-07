@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { AppSettings, CRMConfig, JobRecord } from '../types';
 import { Settings, LogOut, Mail, CloudLightning, Save, CheckCircle, BarChart3, Calendar, Loader2, QrCode, Copy, ExternalLink, Palette, Activity, Infinity, RefreshCw } from 'lucide-react';

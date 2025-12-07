@@ -1,3 +1,4 @@
+
 import React, { useMemo, useState } from 'react';
 import { CompanyProfile } from '../types';
 import { dbService } from '../services/dbService';

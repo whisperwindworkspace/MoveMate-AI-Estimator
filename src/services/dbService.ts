@@ -1,3 +1,5 @@
+
+
 import { supabase } from './supabaseClient';
 import { InventoryItem, CompanyProfile, JobRecord, AppSettings } from '../types';
 
@@ -44,11 +46,6 @@ const isValidUUID = (uuid: string | null | undefined): uuid is string => {
   const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   return regex && regex.test(uuid);
 };
-
-// --- In-Memory Cache for Idempotency ---
-// This acts as a hard shield. Once a Job ID is processed successfully in this session,
-// we never send it to the DB again.
-const processedJobIds = new Set<string>();
 
 // --- Services ---
 
@@ -366,7 +363,7 @@ export const dbService = {
       throw new Error(msg);
     }
     
-    // SERVER-SIDE LIMIT CHECK
+    // SERVER-SIDE LIMIT CHECK (Double Protection)
     const companyProfile = await this.getCompanyPublicProfile(job.company_id);
     if (companyProfile && companyProfile.usageLimit !== null && companyProfile.usageLimit !== undefined) {
         if ((companyProfile.usageCount || 0) >= companyProfile.usageLimit) {
@@ -377,68 +374,35 @@ export const dbService = {
     }
 
     const id = job.id ?? generateUUID();
-    
-    // --- IDEMPOTENCY CHECK (Memory) ---
-    if (processedJobIds.has(id)) {
-        console.warn(`[Idempotency] Job ${id} already processed. Returning cached success.`);
-        // Return a mock object to satisfy the call without hitting DB
-        return {
-            ...job,
-            id,
-            created_at: new Date().toISOString(),
-            status: 'NEW',
-            crm_status: 'skipped'
-        } as JobRecord;
-    }
-
     const payload: any = {
       ...job,
       id,
     };
     
-    // STRICT IDEMPOTENCY CHECK (Database Layer)
+    console.log('dbService: inserting job payload', payload);
+
     try {
-        // 1. Check if ID exists (Guard against race conditions)
-        const { data: existing } = await supabase
-            .from('jobs')
-            .select('*')
-            .eq('id', id)
-            .maybeSingle();
+      const { error } = await supabase.from('jobs').insert(payload);
 
-        if (existing) {
-            console.warn('Duplicate Job ID detected via DB Check. Skipping insert.');
-            processedJobIds.add(id); // Ensure cache is updated
-            return existing as JobRecord;
-        }
+      if (error) {
+        console.error('Create Job Error', JSON.stringify(error, null, 2));
+        throw error;
+      }
 
-        // 2. Insert (Safe because we checked first)
-        const { data, error } = await supabase
-            .from('jobs')
-            .insert(payload)
-            .select()
-            .single();
+      console.log('Job created successfully. DB Trigger will increment usage.');
+      
+      // Removed manual incrementCompanyUsage call to avoid double counting.
+      // The DB trigger 'on_job_created' handles this atomically.
 
-        if (error) {
-            // Even with check-first, catch Unique Constraint violations
-            if (error.code === '23505') {
-                console.warn('Duplicate Job ID detected via Constraint. Skipping.');
-                processedJobIds.add(id);
-                // Fetch again to return the object
-                const retry = await this.fetchJobById(id);
-                return retry || (payload as JobRecord);
-            }
-            console.error('Create Job Error', JSON.stringify(error, null, 2));
-            throw error;
-        }
+      const newJob: JobRecord = {
+        ...(payload as any),
+        created_at: (payload as any).created_at ?? new Date().toISOString(),
+      };
 
-        // SUCCESS
-        processedJobIds.add(id); // Mark as processed
-        console.log('Job created successfully.');
-        return (data as JobRecord);
-
-    } catch (e: any) {
-        console.error('Create Job Exception', JSON.stringify(e, null, 2));
-        throw e;
+      return newJob;
+    } catch (e) {
+      console.error('Create Job Exception', JSON.stringify(e, null, 2));
+      throw e;
     }
   },
 

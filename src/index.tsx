@@ -9,8 +9,7 @@ if (!rootElement) {
 
 const root = ReactDOM.createRoot(rootElement);
 
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+// Render without StrictMode so dev behaves more like production and
+// components/effects aren't double-invoked (which was causing stutter
+// with the camera + overlays).
+root.render(<App />);

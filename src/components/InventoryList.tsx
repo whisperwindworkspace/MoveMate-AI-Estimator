@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { InventoryItem } from '../types';
 import { Trash2, Package, Truck, Box, Sofa, CheckCircle2, Circle, Edit2, Monitor, Armchair, AlertTriangle, CheckSquare, Square } from 'lucide-react';

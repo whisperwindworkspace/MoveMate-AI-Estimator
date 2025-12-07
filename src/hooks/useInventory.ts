@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { InventoryItem, JobDetails } from '../types';
 import { dbService } from '../services/dbService';
-import { analyzeImageForInventory, analyzeVideoFrames, parseVoiceCommand } from '../services/geminiService';
+import {
+  analyzeImageForInventory,
+  analyzeVideoFrames,
+  parseVoiceCommand,
+} from '../services/geminiService';
 
 interface UseInventoryResult {
   items: InventoryItem[];
@@ -20,10 +24,16 @@ interface UseInventoryResult {
   handleSelectAll: (select: boolean) => Promise<void>;
   handleUpdateQuantity: (id: string, d: number) => Promise<void>;
   handleDeleteItem: (id: string) => Promise<void>;
-  handleSaveItem: (data: Partial<InventoryItem>, editingId?: string) => Promise<void>;
+  handleSaveItem: (
+    data: Partial<InventoryItem>,
+    editingId?: string,
+  ) => Promise<void>;
 }
 
-export const useInventory = (sessionId: string, isLimitReached: boolean): UseInventoryResult => {
+export const useInventory = (
+  sessionId: string,
+  isLimitReached: boolean,
+): UseInventoryResult => {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [isLoadingItems, setIsLoadingItems] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -36,13 +46,13 @@ export const useInventory = (sessionId: string, isLimitReached: boolean): UseInv
     if (isLimitReached) return;
 
     const init = async () => {
-        await dbService.checkConnection();
-        setIsLoadingItems(true);
-        const fetchedItems = await dbService.getItems(activeJobId);
-        setItems(fetchedItems);
-        setIsLoadingItems(false);
+      await dbService.checkConnection();
+      setIsLoadingItems(true);
+      const fetchedItems = await dbService.getItems(activeJobId);
+      setItems(fetchedItems);
+      setIsLoadingItems(false);
     };
-    init();
+    void init();
   }, [activeJobId, isLimitReached]);
 
   const handleImageCaptured = async (base64: string) => {
@@ -50,55 +60,55 @@ export const useInventory = (sessionId: string, isLimitReached: boolean): UseInv
     setError(null);
     try {
       const newItems = await analyzeImageForInventory(base64);
-      const savedItems = [];
+      const savedItems: InventoryItem[] = [];
       for (const item of newItems) {
-         const saved = await dbService.upsertItem(item, activeJobId);
-         savedItems.push(saved);
+        const saved = await dbService.upsertItem(item, activeJobId);
+        savedItems.push(saved);
       }
-      setItems(prev => [...prev, ...savedItems]);
+      setItems((prev) => [...prev, ...savedItems]);
     } catch (err: any) {
       console.error(err);
-      setError("Failed to analyze image. " + (err.message || ''));
+      setError('Failed to analyze image. ' + (err.message || ''));
     } finally {
       setIsAnalyzing(false);
     }
   };
 
   const handleVideoCaptured = async (frames: string[]) => {
-      setIsAnalyzing(true);
-      setError(null);
-      try {
-          const newItems = await analyzeVideoFrames(frames);
-          const savedItems = [];
-          for (const item of newItems) {
-              const saved = await dbService.upsertItem(item, activeJobId);
-              savedItems.push(saved);
-          }
-          setItems(prev => [...prev, ...savedItems]);
-      } catch (err) {
-          console.error(err);
-          setError("Failed to analyze video.");
-      } finally {
-          setIsAnalyzing(false);
+    setIsAnalyzing(true);
+    setError(null);
+    try {
+      const newItems = await analyzeVideoFrames(frames);
+      const savedItems: InventoryItem[] = [];
+      for (const item of newItems) {
+        const saved = await dbService.upsertItem(item, activeJobId);
+        savedItems.push(saved);
       }
+      setItems((prev) => [...prev, ...savedItems]);
+    } catch (err) {
+      console.error(err);
+      setError('Failed to analyze video.');
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   const handleVoiceResult = async (transcript: string) => {
     setIsAnalyzing(true);
     setError(null);
     try {
-        const newItems = await parseVoiceCommand(transcript);
-        const savedItems = [];
-        for (const item of newItems) {
-            const saved = await dbService.upsertItem(item, activeJobId);
-            savedItems.push(saved);
-        }
-        setItems(p => [...p, ...savedItems]);
-    } catch (err) { 
-        console.error(err); 
-        setError("Voice command failed."); 
-    } finally { 
-        setIsAnalyzing(false); 
+      const newItems = await parseVoiceCommand(transcript);
+      const savedItems: InventoryItem[] = [];
+      for (const item of newItems) {
+        const saved = await dbService.upsertItem(item, activeJobId);
+        savedItems.push(saved);
+      }
+      setItems((p) => [...p, ...savedItems]);
+    } catch (err) {
+      console.error(err);
+      setError('Voice command failed.');
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
@@ -106,68 +116,134 @@ export const useInventory = (sessionId: string, isLimitReached: boolean): UseInv
     const oldId = jobDetails.jobId || sessionId;
     setJobDetails(details);
     if (details.jobId && details.jobId !== oldId) {
-       try {
-         await dbService.updateJobId(oldId, details.jobId);
-         const refreshed = await dbService.getItems(details.jobId);
-         setItems(refreshed);
-       } catch (e) { console.error(e); }
+      try {
+        await dbService.updateJobId(oldId, details.jobId);
+        const refreshed = await dbService.getItems(details.jobId);
+        setItems(refreshed);
+      } catch (e) {
+        console.error(e);
+      }
     }
   };
 
   const handleToggleSelect = async (id: string) => {
-    setItems(currentItems => {
-        const item = currentItems.find(i => i.id === id);
-        if (item) {
-            const updated = { ...item, selected: !item.selected };
-            dbService.upsertItem(updated, activeJobId).catch(e => console.error("Toggle failed:", JSON.stringify(e, null, 2)));
-            return currentItems.map(i => i.id === id ? updated : i);
-        }
-        return currentItems;
+    setItems((currentItems) => {
+      const item = currentItems.find((i) => i.id === id);
+      if (item) {
+        const updated: InventoryItem = {
+          ...item,
+          selected: !item.selected,
+        };
+        void dbService
+          .upsertItem(updated, activeJobId)
+          .catch((e) =>
+            console.error(
+              'Toggle failed:',
+              JSON.stringify(e, null, 2),
+            ),
+          );
+        return currentItems.map((i) => (i.id === id ? updated : i));
+      }
+      return currentItems;
     });
   };
 
   const handleSelectAll = async (select: boolean) => {
-      setItems(current => {
-          const updated = current.map(i => ({ ...i, selected: select }));
-          updated.forEach(i => dbService.upsertItem(i, activeJobId).catch(e => console.error("SelectAll failed:", JSON.stringify(e, null, 2))));
-          return updated;
-      });
+    setItems((current) => {
+      const updated = current.map((i) => ({ ...i, selected: select }));
+      updated.forEach((i) =>
+        dbService
+          .upsertItem(i, activeJobId)
+          .catch((e) =>
+            console.error(
+              'SelectAll failed:',
+              JSON.stringify(e, null, 2),
+            ),
+          ),
+      );
+      return updated;
+    });
   };
 
   const handleUpdateQuantity = async (id: string, d: number) => {
-    setItems(current => {
-        const item = current.find(i => i.id === id);
-        if (item) {
-            const updated = { ...item, quantity: Math.max(1, item.quantity + d) };
-            dbService.upsertItem(updated, activeJobId).catch(e => console.error("Qty failed:", JSON.stringify(e, null, 2)));
-            return current.map(i => i.id === id ? updated : i);
-        }
-        return current;
+    setItems((currentItems) => {
+      const item = currentItems.find((i) => i.id === id);
+      if (item) {
+        const newQuantity = Math.max(0, (item.quantity || 0) + d);
+        const updated: InventoryItem = { ...item, quantity: newQuantity };
+        void dbService
+          .upsertItem(updated, activeJobId)
+          .catch((e) =>
+            console.error(
+              'UpdateQuantity failed:',
+              JSON.stringify(e, null, 2),
+            ),
+          );
+        return currentItems.map((i) => (i.id === id ? updated : i));
+      }
+      return currentItems;
     });
   };
 
   const handleDeleteItem = async (id: string) => {
-    setItems(current => current.filter(i => i.id !== id));
-    await dbService.deleteItem(id);
+    setItems((currentItems) => {
+      const remaining = currentItems.filter((i) => i.id !== id);
+      void dbService
+        .deleteItem(id)
+        .catch((e) =>
+          console.error('Delete failed:', JSON.stringify(e, null, 2)),
+        );
+      return remaining;
+    });
   };
 
-  const handleSaveItem = async (data: Partial<InventoryItem>, editingId?: string) => {
-      if (editingId) {
-          const updated = { ...data, id: editingId } as InventoryItem;
-          setItems(current => current.map(i => i.id === editingId ? updated : i));
-          await dbService.upsertItem(updated, activeJobId).catch(e => console.error("Save failed:", JSON.stringify(e, null, 2)));
-      } else {
-          const newItem = { ...data, id: crypto.randomUUID(), selected: true } as InventoryItem;
-          setItems(current => [...current, newItem]);
-          await dbService.upsertItem(newItem, activeJobId).catch(e => console.error("Create failed:", JSON.stringify(e, null, 2)));
+  const handleSaveItem = async (
+    data: Partial<InventoryItem>,
+    editingId?: string,
+  ) => {
+    if (!data.name || !data.quantity) return;
+
+    const payload: InventoryItem = {
+      id: editingId || data.id || crypto.randomUUID(),
+      name: data.name,
+      quantity: data.quantity,
+      volumeCuFt: data.volumeCuFt ?? 0,
+      weightLbs: data.weightLbs ?? 0,
+      category: data.category || 'Misc',
+      tags: data.tags || [],
+      selected: data.selected ?? true,
+      imageUrl: data.imageUrl,
+      confidence: data.confidence,
+      disassembly: data.disassembly,
+    };
+
+    const saved = await dbService.upsertItem(payload, activeJobId);
+    setItems((current) => {
+      const exists = current.find((i) => i.id === saved.id);
+      if (exists) {
+        return current.map((i) => (i.id === saved.id ? saved : i));
       }
+      return [...current, saved];
+    });
   };
 
   return {
-    items, setItems, isLoadingItems, isAnalyzing, error, setError,
-    jobDetails, setJobDetails,
-    handleImageCaptured, handleVideoCaptured, handleVoiceResult,
-    handleUpdateJobDetails, handleToggleSelect, handleSelectAll,
-    handleUpdateQuantity, handleDeleteItem, handleSaveItem
+    items,
+    setItems,
+    isLoadingItems,
+    isAnalyzing,
+    error,
+    setError,
+    jobDetails,
+    setJobDetails,
+    handleImageCaptured,
+    handleVideoCaptured,
+    handleVoiceResult,
+    handleUpdateJobDetails,
+    handleToggleSelect,
+    handleSelectAll,
+    handleUpdateQuantity,
+    handleDeleteItem,
+    handleSaveItem,
   };
 };

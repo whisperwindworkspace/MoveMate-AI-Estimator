@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { UserRole, ViewMode, AppSettings } from '../types';
 import { subscribeToAuthChanges, getUserProfile, signOut, signInWithEmail } from '../services/authService';

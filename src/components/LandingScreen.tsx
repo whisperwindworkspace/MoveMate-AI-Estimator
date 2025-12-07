@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { JobDetails } from '../types';
 import { Truck, Calendar, User, Hash, Lock } from 'lucide-react';

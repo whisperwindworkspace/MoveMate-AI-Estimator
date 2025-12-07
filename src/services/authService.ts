@@ -1,3 +1,4 @@
+
 import { supabase } from './supabaseClient';
 import { UserProfile } from '../types';
 
